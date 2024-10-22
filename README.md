@@ -4,6 +4,7 @@ For CSE573 final project at UB Fall 2024
 
 - Download osu!lazer from the official site
 - Apply the custom skin by running the .osk file
+- Set background dim to 100% in settings
 - Select an appropriate beatmap preferably a decent distribution of normal and hold notes over multiple beatmaps
 - Select a replay of the beatmap and run vision.ipynb, a 60 second recording at 1 FPS will be saved at /video_out/
 - Run dataset_process.ipynb to split each recording frame into an image saved at /frames/unlabeled/{idx}
