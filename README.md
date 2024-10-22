@@ -12,3 +12,6 @@ For CSE573 final project at UB Fall 2024
 - Assign labeling task and label each element by "note", "start_hold", "end_hold"
   - "note" and "start_hold" should be at least 30% visible to be considered
   - The tail end of "end_hold" should be entirely visible to be considered
+  - For "start_hold" include the circle and a bit of the hold bar equivalent to roughly 50% of the circle
+  - For "end_hold" include the tail part and a bit of the black area beyond it, given there isn't another note immediately after
+- Double check annotations after a set
