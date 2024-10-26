@@ -12,6 +12,9 @@ For CSE573 final project at UB Fall 2024
 - Assign labeling task and label each element by "note", "start_hold", "end_hold"
   - "note" and "start_hold" should be at least 30% visible to be considered
   - The tail end of "end_hold" should be entirely visible to be considered
+  - For "start_hold" include the circle and a bit of the hold bar equivalent to roughly 30% of the circle
+  - For "end_hold" include the tail part and a bit of the black area beyond it, given there isn't another note immediately after
+- Double check annotations after a set
 
 ## Customized osu!lazer for score retrieval via sockets
 - Clone official osu!lazer client from https://github.com/ppy/osu
@@ -19,3 +22,4 @@ For CSE573 final project at UB Fall 2024
 - Navigate to \osu\ in a terminal and start build using dotnet run --project osu.Desktop
 - Use helper.SocketListener class to retrieve note hit judgements
 - See socket_test.ipynb for example on SocketListener
+
