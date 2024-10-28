@@ -1,0 +1,13 @@
+train: ../data/train/images
+val: ../data/valid/images
+test: ../data/test/images
+
+nc: 3
+names: ['end_hold', 'note', 'start_hold']
+
+roboflow:
+  workspace: auto-osu-mania
+  project: cvrl
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/auto-osu-mania/cvrl/dataset/3
