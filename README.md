@@ -16,10 +16,10 @@ For CSE573 final project at UB Fall 2024
   - For "end_hold" include the tail part and a bit of the black area beyond it, given there isn't another note immediately after
 - Double check annotations after a set
 
-## Customized osu!lazer for score retrieval via sockets
-- Clone official osu!lazer client from https://github.com/ppy/osu
-- Replace "\osu\osu.Game.Rulesets.Mania\Scoring\ManiaScoreProcessor.cs" with \misc\ManiaScoreProcessor.cs
-- Navigate to \osu\ in a terminal and start build using dotnet run --project osu.Desktop
+## Customized osu!lazer client for score retrieval via sockets
+- Clone official osu!lazer repository from https://github.com/ppy/osu
+- Replace "\osu\osu.Game.Rulesets.Mania\Scoring\ManiaScoreProcessor.cs" with "\misc\ManiaScoreProcessor.cs"
+- Navigate to \osu\ in a terminal and start local development build using dotnet run --project osu.Desktop
 - Use helper.SocketListener class to retrieve note hit judgements
 - See socket_test.ipynb for example on SocketListener
 
