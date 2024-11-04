@@ -18,8 +18,8 @@ For CSE573 final project at UB Fall 2024
 
 ## Customized osu!lazer client for score retrieval via sockets
 - Clone official osu!lazer repository from https://github.com/ppy/osu
-- Replace "\osu\osu.Game.Rulesets.Mania\Scoring\ManiaScoreProcessor.cs" with "\misc\ManiaScoreProcessor.cs"
 - Install .NET SDK from https://dotnet.microsoft.com/en-us/download
+- Replace "\osu\osu.Game.Rulesets.Mania\Scoring\ManiaScoreProcessor.cs" with "\misc\ManiaScoreProcessor.cs"
 - Navigate to \osu\ in a terminal and start local development build using dotnet run --project osu.Desktop
 - Use helper.SocketListener class to retrieve note hit judgements
 - See socket_test.ipynb for example on SocketListener
