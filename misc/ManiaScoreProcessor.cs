@@ -5,6 +5,7 @@ using System;
 using System.Net.Sockets;
 using System.Collections.Generic;
 using System.Linq;
+using System.Timers;
 using osu.Game.Beatmaps;
 using osu.Game.Rulesets.Judgements;
 using osu.Game.Rulesets.Mania.Objects;
@@ -12,6 +13,7 @@ using osu.Game.Rulesets.Objects;
 using osu.Game.Rulesets.Scoring;
 using osu.Game.Screens.Play;
 using osu.Framework.Logging;
+using osu.Framework.Allocation;
 
 namespace osu.Game.Rulesets.Mania.Scoring
 {
@@ -20,7 +22,9 @@ namespace osu.Game.Rulesets.Mania.Scoring
         private const double combo_base = 4;
         private TcpClient? client;
         private NetworkStream? stream;
-
+        private Timer stateCheckTimer;
+        [Resolved]
+        private GameplayState? gameplayState { get; set; }
 
         public ManiaScoreProcessor()
             : base(new ManiaRuleset())
@@ -29,6 +33,11 @@ namespace osu.Game.Rulesets.Mania.Scoring
             {
                 initSocketConnection();
             }
+
+            stateCheckTimer = new Timer(1000);
+            stateCheckTimer.Elapsed += onStateCheck;
+            stateCheckTimer.AutoReset = true;
+            stateCheckTimer.Start();
         }
 
         private void initSocketConnection()
@@ -44,16 +53,32 @@ namespace osu.Game.Rulesets.Mania.Scoring
             }
         }
 
-        protected void SendHitOverSocket(int hitResult)
+        protected void SendDataOverSocket(int outgoing)
         {
             try
             {
-                byte[] data = BitConverter.GetBytes(hitResult);
+                byte[] data = BitConverter.GetBytes(outgoing);
                 stream?.Write(data, 0, data.Length);
             }
             catch
             {
                 return;
+            }
+        }
+
+        private void onStateCheck(object? source, ElapsedEventArgs e)
+        {
+            if (gameplayState!.HasPassed)
+            {
+                Logger.Log("Player has passed the song.");
+                SendDataOverSocket(6);
+                stateCheckTimer.Stop();
+            }
+            else if (gameplayState!.HasFailed)
+            {
+                Logger.Log("Player has failed the song.");
+                SendDataOverSocket(7);
+                stateCheckTimer.Stop();
             }
         }
 
@@ -63,6 +88,8 @@ namespace osu.Game.Rulesets.Mania.Scoring
 
             stream?.Close();
             client?.Close();
+            stateCheckTimer?.Stop();
+            stateCheckTimer?.Dispose();
         }
 
         protected void SendHitResult(HitResult result)
@@ -75,22 +102,22 @@ namespace osu.Game.Rulesets.Mania.Scoring
             switch (result)
             {
                 case HitResult.Miss:
-                    SendHitOverSocket(0);
+                    SendDataOverSocket(0);
                     break;
                 case HitResult.Meh:
-                    SendHitOverSocket(1);
+                    SendDataOverSocket(1);
                     break;
                 case HitResult.Ok:
-                    SendHitOverSocket(2);
+                    SendDataOverSocket(2);
                     break;
                 case HitResult.Good:
-                    SendHitOverSocket(3);
+                    SendDataOverSocket(3);
                     break;
                 case HitResult.Great:
-                    SendHitOverSocket(4);
+                    SendDataOverSocket(4);
                     break;
                 case HitResult.Perfect:
-                    SendHitOverSocket(5);
+                    SendDataOverSocket(5);
                     break;
                 default:
                     break;

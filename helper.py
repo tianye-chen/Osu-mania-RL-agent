@@ -34,6 +34,19 @@ class SocketListener():
     server: str: IP address of the server
     port: int: Port number to listen on
     data_handler: function: Function to handle incoming data
+    
+    Raw data is passed to data_handler as bytes, make sure to decode
+    
+    Data is sent in integers and represents the following:
+    
+    0 - Miss \\
+    1 - Meh \\
+    2 - Ok \\
+    3 - Good \\
+    4 - Great \\
+    5 - Perfect \\
+    6 - Song passed \\
+    7 - Song failed
     '''
     self.server = server
     self.port = port
