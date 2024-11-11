@@ -3,6 +3,8 @@ import os
 import traceback 
 import socket
 import numpy as np
+import threading
+import time
 
 def split_frames(in_path, out_path):
   vid = cv2.VideoCapture(in_path)
@@ -29,7 +31,7 @@ def split_frames(in_path, out_path):
   print(f"Wrote {frame_idx} frames to /{out_path}")
 
 class SocketListener():
-  def __init__(self, server='127.0.0.1', port=5555, data_handler=None):
+  def __init__(self, server='127.0.0.1', port=5555):
     '''
     server: str: IP address of the server
     port: int: Port number to listen on
@@ -51,8 +53,8 @@ class SocketListener():
     self.server = server
     self.port = port
     self.sock = None
-    self.data_handler = data_handler
-    
+    self.latest_data = None
+   
     #### Flags
     
     # Will be true at start, set to false after song ends or on stop()
@@ -67,11 +69,17 @@ class SocketListener():
     
     # True if stop() is called    
     self.stop_requested = False       
-    
+
+    # Event flag for new data detection
+    self.has_new_data = threading.Event()
+
   def start(self):
     '''
     Starts the socket listener
     '''
+    threading.Thread(target=self._listen, daemon=True).start()
+    
+  def _listen(self):
     try:
       self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
       self.sock.bind((self.server, self.port))
@@ -102,9 +110,10 @@ class SocketListener():
         data = conn.recv(4)
         if not data:
           break
-      
-        if self.data_handler:
-          self.data_handler(data)
+        
+        self.latest_data = data
+        self.has_new_data.set() # signal that new data has arrived
+
     except ConnectionResetError:
       print(f'Connection reset by {addr}')
     except Exception as e:
@@ -129,4 +138,21 @@ class SocketListener():
       print(f'Socket listener stopped.')
     else:
       print('Socket listener is not running.')
-    
+  
+  def fetch_data(self, action_fuc, timeout):
+    """
+      Fetches data specifically after performing an action.
+      action_func: function that triggers the keyboard action
+      timeout: float: Time to wait for data, in seconds
+    """
+    # clear the event flag before performing action
+    self.has_new_data.clear()
+
+    # perform the action function
+    action_fuc()
+
+    # wait for new data within timeout
+    if self.has_new_data.wait(timeout=timeout):
+      return self.latest_data
+    else:
+      return None # no data received
