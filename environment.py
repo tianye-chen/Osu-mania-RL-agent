@@ -25,8 +25,8 @@ class OsuEnvironment(gym.Env):
         self.observation = deque(maxlen=4)
 
         # returns 4 stacked of list of note vectors in [type, lane, y position]
-        # maximum notes return is 12 
-        self.max_notes = 12
+        # maximum notes return
+        self.max_notes = 8
         self.observation_space = spaces.Box(low=0, high=np.inf, shape=(4, self.max_notes, 3), dtype=np.float32)
 
         # 4 lane where each note can do nothing, pressed, held or release

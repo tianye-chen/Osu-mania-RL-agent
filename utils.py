@@ -6,17 +6,17 @@ import random
 import math
 
 class DQN(nn.Module):
-    def __init__(self, input_size, output_size, dueling = False):
+    def __init__(self, input_size, output_size, dueling = False, std_init=0.5, noisy=False):
         super(DQN, self).__init__()
         self.dueling = dueling
         self.Linear_layer = nn.Sequential(
             nn.Linear(input_size, 128),
             nn.ReLU(inplace=True),
-            nn.Linear(128, 64),
+            Noisy_Layer(128, 64, std_init) if noisy else nn.Linear(128, 64),
             nn.ReLU(inplace=True)
         )
-        self.advantage_stream = nn.Linear(64, output_size)
-        self.value_stream = nn.Linear(64,1)
+        self.advantage_stream = Noisy_Layer(64, output_size, std_init) if noisy else nn.Linear(64, output_size) 
+        self.value_stream = Noisy_Layer(64, 1) if noisy else nn.Linear(64,1)
         
     def forward(self, x):
         x = self.Linear_layer(x)
@@ -44,9 +44,9 @@ class ReplayMemory:
         return(len(self.memory))
     
 # https://github.com/higgsfield/RL-Adventure/blob/master/5.noisy%20dqn.ipynb
-class Noisy_DQN(nn.Module):
+class Noisy_Layer(nn.Module):
     def __init__(self, input, output, std_init=0.5):
-        super(Noisy_DQN, self).__init__()
+        super(Noisy_Layer, self).__init__()
         self.input = input
         self.output = output
         self.std_init = std_init
@@ -66,6 +66,7 @@ class Noisy_DQN(nn.Module):
 
     def forward(self, x):
         if self.training:
+            self.reset_noise()
             weight = self.weight_mu * self.weight_sigma.mul(self.weight_epsilon)
             bias = self.bias_mu * self.bias_sigma.mul(self.bias_epsilon)
 
