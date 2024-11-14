@@ -49,7 +49,9 @@ class OsuEnvironment(gym.Env):
         self.currently_hold = [False] * len(self.keys)
         self.invalid = False
         self.listener.start()
-        self.observation = np.zeros((4, 12, 3), dtype=int)
+        self.observation.clear()
+        for _ in range(self.max_notes):
+            self.observation.append([0,0,0])
         
     def checking_connection(self):
         return self.listener.is_listening or self.listener.is_first_connection
@@ -173,8 +175,9 @@ class OsuEnvironment(gym.Env):
             ret.append([class_id, lane, y_center])
 
         # only care about notes that are near the hit window
-        ret = sorted(ret, key=lambda note: note[2])
-        ret = ret[:self.max_notes]
+        ret = sorted(ret, key=lambda note: note[2], reverse=True)
+        if ret:
+            ret = ret[:self.max_notes]
 
         # add padding if it is less than max note
         ret += [[0,0,0]] * (self.max_notes - len(ret))
@@ -189,7 +192,7 @@ class OsuEnvironment(gym.Env):
         image = vision_thread.result()
 
         vision_thread = self.executor.submit(self._detect, np.array(image), self.model)
-        self.observation = vision_thread.result()
+        self.observation.append(vision_thread.result())
 
     def _perform_action(self, actions):
         for lane in range(len(actions)):

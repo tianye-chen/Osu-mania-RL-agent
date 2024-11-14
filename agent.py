@@ -2,6 +2,8 @@ from utils import DQN, ReplayMemory
 import random
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
+import pandas as pd
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -51,8 +53,9 @@ class Agent:
         # track reward and loss
         self.rewards = []
         self.loss = []
+        self.steps = []
 
-    def action_policy(self, state):
+    def _action_policy(self, state):
         if self.noisy_dqn:
             with torch.no_grad():
                 return self.policy_net(state).argmax(dim=2)
@@ -66,7 +69,7 @@ class Agent:
                 with torch.no_grad():
                     return self.policy_net(state).argmax(dim=2)
     
-    def update_model(self):
+    def _update_model(self):
         if len(self.experience_replay) < self.batch_size:
             return
         
@@ -81,9 +84,76 @@ class Agent:
         non_final_next_states = torch.cat([s for s, done in zip(next_state_batch, done_batch) if not done])
 
         # compute q values
-        q_values = self.policy_net(state_batch).gather(2, action_batch.unsqueeze(2))
+        q_values = self.policy_net(state_batch).gather(2, action_batch.unsqueeze(2)).squeeze(2)
 
         # compute expect q values
-        next_state_values = torch.zeros(self.batch_size, device=device)
+        next_state_values = torch.zeros_like(q_values, device=device)
         with torch.no_grad():
-            next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1).values
+            next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(dim=2).values
+
+        expected_q_values = (next_state_values * self.discount_factor) + reward_batch
+
+        # compute lose
+        loss = self.criterion(q_values, expected_q_values)
+
+        # backpropagation
+        self.optimizer.zero_grad()
+        loss.backward()
+
+        # gradient clipping
+        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+
+        self.optimizer.step()
+
+        return loss.item()
+    
+    def _smooth_data(self, data):
+        window_size = int(len(data)*0.05)
+        window_size = max(1, window_size)
+        return pd.Series(data).rolling(window=window_size).mean()
+    
+    def plot(self):
+        average_rewards = self._smooth_data(self.rewards)
+        plt.plot(average_rewards)
+        plt.xlabel('Episode')
+        plt.ylabel('Total Reward')
+        plt.title('Total Rewards Over Episodes')
+        plt.show()
+
+        average_loss = self._smooth_data(self.loss)
+        plt.plot(average_loss)
+        plt.xlabel('Episode')
+        plt.ylabel('Loss Value')
+        plt.title('Loss Values Over Episodes')
+        plt.show()
+    
+    def saveModel(self, name):
+        torch.save(self.policy_net.state_dict(), f"{name}_network.pth")
+
+        torch.save({
+            'loss': self.loss,
+            'reward': self.rewards,
+            'step' : self.steps
+            }, f"{name}_metadata.pth"
+        )
+
+    def loadModel(self, name):
+        self.policy_net.load_state_dict(torch.load(f"{name}_network.pth"))
+        metadata = torch.load(f"{name}_metadata.pth")
+
+        self.loss = metadata['loss']
+        self.rewards = metadata['reward']
+        self.steps = metadata['step']
+
+    def train(self, total_episode = 500):
+        printLast = False
+        for episode in range(total_episode):
+            total_loss = 0
+            total_reward = 0
+            total_step = 0
+            done = False
+            state = self.env.reset()
+            # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, )
+
+    
