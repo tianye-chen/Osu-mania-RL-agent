@@ -6,29 +6,53 @@ import random
 import math
 
 class DQN(nn.Module):
-    def __init__(self, input_size, output_size, dueling = False, std_init=0.5, noisy=False):
+    def __init__(self, input_size, max_notes, action_space, dueling = False, std_init=0.5, noisy=False):
         super(DQN, self).__init__()
         self.dueling = dueling
-        self.Linear_layer = nn.Sequential(
-            nn.Linear(input_size, 128),
+        # conv1d because it need to caputre the velocity from stacked note frame
+        self.conv_layer = nn.Sequential(
+            nn.Conv1d(input_size, 64, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
-            Noisy_Layer(128, 64, std_init) if noisy else nn.Linear(128, 64),
+            nn.Conv1d(64, 64, kernel_size=3, padding=1),
             nn.ReLU(inplace=True)
         )
-        self.advantage_stream = Noisy_Layer(64, output_size, std_init) if noisy else nn.Linear(64, output_size) 
-        self.value_stream = Noisy_Layer(64, 1) if noisy else nn.Linear(64,1)
-        
+        self.linear_layer = nn.Sequential(
+            Noisy_Layer(64*3*max_notes, 128, std_init) if noisy 
+            else nn.Linear(64*3*max_notes, 128),
+            nn.ReLU(inplace=True)
+        )
+        self.value_stream = Noisy_Layer(128, 1) if noisy else nn.Linear(128,1)
+        # split the actions into 4 layers that each represents the key action
+        if noisy:
+            self.advantage_stream = nn.ModuleList([
+                Noisy_Layer(128, dim) for dim in action_space
+            ])
+        else:
+            self.advantage_stream = nn.ModuleList([
+                nn.Linear(128, dim) for dim in action_space
+            ])
+    
     def forward(self, x):
-        x = self.Linear_layer(x)
+        x = self.conv_layer(x)
+        x = x.view(x.size(0), -1)
+        x = self.linear_layer(x)
         if self.dueling:
-            value = self.value_stream(x)
-            advantage = self.advantage_stream(x)
-            q_values = value + (advantage - advantage.mean(dim=1, keepdim=True))
+            value = self.value_stream(x).unsqueeze(1)
+            advantage = [adv(x).unsqueeze(1) for adv in self.advantage_stream]
+            advantage = torch.cat(advantage, dim=1)
+
+            q_values = value + (advantage - advantage.mean(dim=2, keepdim=True))
 
             return q_values
         else:
-            x = self.advantage_stream(x)
-            return x
+            # unsqueeze to separate q values per key action
+            # return shape (batch, 1, action) per keys
+            q_values = [adv(x).unsqueeze(1) for adv in self.advantage_stream]
+
+            # concat to get shape (batch, key, action)
+            q_values = torch.cat(q_values, dim=1)
+            
+            return q_values
         
 class ReplayMemory:
     def __init__(self, capacity):
@@ -93,6 +117,6 @@ class Noisy_Layer(nn.Module):
 
     def _scale_noise(self, size):
         x = torch.randn(size)
-        x = x.sign().mul(x.abso().sqrt())
+        x = x.sign().mul(x.abs().sqrt())
         return x
 
