@@ -70,8 +70,11 @@ class SocketListener():
     # True if stop() is called    
     self.stop_requested = False       
 
-    # Event flag for new data detection
+    # Event flag for new data detection 
     self.has_new_data = threading.Event()
+
+    # Save the terminate or truncate value in case delay miss it
+    self.song_end = None
 
   def start(self):
     '''
@@ -108,10 +111,13 @@ class SocketListener():
     try:
       while True:
         data = conn.recv(4)
+        self.latest_data = int.from_bytes(data, byteorder='little')
+        if self.latest_data == 6 or self.latest_data == 7:
+          self.song_end = self.latest_data
+
         if not data:
           break
         
-        self.latest_data = data
         self.has_new_data.set() # signal that new data has arrived
 
     except ConnectionResetError:
@@ -154,5 +160,8 @@ class SocketListener():
     # wait for new data within timeout
     if self.has_new_data.wait(timeout=timeout):
       return self.latest_data
+    elif self.song_end is not None:
+      data = self.song_end
+      return data
     else:
       return None # no data received

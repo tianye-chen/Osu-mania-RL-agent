@@ -4,6 +4,8 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import pandas as pd
+import time
+from pynput.keyboard import Controller
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -28,6 +30,7 @@ class Agent:
         self.env = env
         self.observation_space = env.observation_space
         self.action_space = env.action_space
+        self.keyboard = Controller()
         
         # define hyperparameter
         self.criterion = criterion
@@ -43,9 +46,10 @@ class Agent:
         self.epsilon_update = 0
 
         # define the dqn
-        input_size = sum(self.observation_space.shape)
-        self.policy_net = DQN(input_size, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
-        self.target_net = DQN(input_size, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
+        input_size = self.observation_space.shape[0]
+        self.max_notes = self.observation_space.shape[1]
+        self.policy_net = DQN(input_size, self.max_notes, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
+        self.target_net = DQN(input_size, self.max_notes. self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.experience_replay = ReplayMemory(self.capacity)
         self.expert_replay = None # store expert replay for demonstration
@@ -105,6 +109,9 @@ class Agent:
 
         self.optimizer.step()
 
+        # soft update for target network
+        self._soft_update()
+
         return loss.item()
     
     def _smooth_data(self, data):
@@ -145,15 +152,76 @@ class Agent:
         self.rewards = metadata['reward']
         self.steps = metadata['step']
 
+    def _soft_update(self):
+         # soft update of the target's weights
+        target_state_dict = self.target_net.state_dict()
+        policy_state_dict = self.policy_net.state_dict()
+        for key in policy_state_dict:
+            target_state_dict[key] = policy_state_dict[key] * self.target_update_rate + target_state_dict[key] * (1-
+                                    self.target_update_rate)
+        self.target_net.load_state_dict(target_state_dict)
+
     def train(self, total_episode = 500):
-        printLast = False
-        for episode in range(total_episode):
+        for episode in range(1, total_episode+1):
             total_loss = 0
             total_reward = 0
             total_step = 0
             done = False
             state = self.env.reset()
             # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, )
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+            time_total = time.time()
+            while not done:
+                if self.env.song_begin():
+                    time_start = time.time()
+                    action = self.action_space(state)
+                    next_state, reward, terminate, truncate = self.env.step(action)
+                    
+                    # convert to proper tensor shape
+                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+                    reward = torch.tensor([reward], device=device)
+                    
+                    done = terminate or truncate
+
+                    # push to experience replay
+                    self.experience_replay.push((state, action, reward, next_state, done))
+
+                    time_total += time.time() - time_start
+
+                    # mini update during the song
+                    if self.env.getUpdateSignal():
+                        self.env.pause_game()
+                        # sample and update 25 time
+                        for _ in range(32):
+                            loss = self._update_model() 
+                            if loss is not None:
+                                total_loss += loss
+
+                        self.env.Updated()
+                        self.env.resume_game()
+
+                    state = next_state
+                    total_step += 1
+                    total_reward += reward
+                
+            # big update after the sond ends
+            for _ in range(64):
+                loss = self._update_model()
+                if loss is not None:
+                    total_loss += loss
+        
+            self.env.return_to_song_selection_after_song()
+
+            avg_loss = total_loss/total_step
+
+            if episode%10 == 0:
+                print(f'Epsiode: {episode}: Total Reward: {total_reward}, Loss: {avg_loss}')
+                print(f"Average running time: {time_total/total_step} per step")
+
+            self.loss.append(total_loss)
+            self.rewards.append(total_reward)
+            self.steps.append(total_step)
+
+
 
     
