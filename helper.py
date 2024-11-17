@@ -35,8 +35,7 @@ class SocketListener():
     '''
     server: str: IP address of the server
     port: int: Port number to listen on
-    data_handler: function: Function to handle incoming data
-    
+  
     Raw data is passed to data_handler as bytes, make sure to decode
     
     Data is sent in integers and represents the following:
@@ -54,7 +53,8 @@ class SocketListener():
     self.port = port
     self.sock = None
     self.latest_data = None
-   
+    self.song_end = None
+
     #### Flags
     
     # Will be true at start, set to false after song ends or on stop()
@@ -73,8 +73,8 @@ class SocketListener():
     # Event flag for new data detection 
     self.has_new_data = threading.Event()
 
-    # Save the terminate or truncate value in case delay miss it
-    self.song_end = None
+    # truncate when connection didn't close after song duration
+    self.song_duration = 0
 
   def start(self):
     '''
@@ -97,6 +97,7 @@ class SocketListener():
           break
         
         conn, addr = self.sock.accept()
+        conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
         print(f'Connection from {addr}')
         self.has_connection = True
         self._handle_connection(conn, addr)
@@ -109,16 +110,30 @@ class SocketListener():
     Internal function to handle incoming connections
     '''
     try:
+      time_start = time.time()
       while True:
-        data = conn.recv(4)
-        self.latest_data = int.from_bytes(data, byteorder='little')
-        if self.latest_data == 6 or self.latest_data == 7:
-          self.song_end = self.latest_data
-
-        if not data:
+        # calculate elapsed time
+        time_elapsed = time.time() - time_start
+        if time_elapsed > self.song_duration: # disconnect when over song duration
+          self.song_end = 7
           break
         
-        self.has_new_data.set() # signal that new data has arrived
+        try:
+          data = conn.recv(4)
+          self.latest_data = int.from_bytes(data, byteorder='little')
+
+          self.has_new_data.set() # signal that new data has arrived
+
+          if self.latest_data in {6,7}:
+            self.song_end = self.latest_data
+            break
+
+        except socket.timeout:
+          continue
+
+        if not data:
+          self.song_end = 7
+          break
 
     except ConnectionResetError:
       print(f'Connection reset by {addr}')
@@ -160,8 +175,7 @@ class SocketListener():
     # wait for new data within timeout
     if self.has_new_data.wait(timeout=timeout):
       return self.latest_data
-    elif self.song_end is not None:
-      data = self.song_end
-      return data
+    elif self.song_end is not None: # return when there is terminate or truncate signal
+      return self.song_end
     else:
       return None # no data received

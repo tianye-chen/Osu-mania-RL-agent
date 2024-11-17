@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import time
 from pynput.keyboard import Controller
+import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -23,7 +24,6 @@ class Agent:
                  capacity=10000,
                  dueling_dqn=False,
                  noisy_dqn=False,
-                 behavior_cloning=False,
                  std_init=0.5):
         
         #define the environment
@@ -43,21 +43,22 @@ class Agent:
         self.batch_size = batch_size
         self.capacity = capacity
         self.noisy_dqn = noisy_dqn
-        self.epsilon_update = 0
 
         # define the dqn
         input_size = self.observation_space.shape[0]
         self.max_notes = self.observation_space.shape[1]
         self.policy_net = DQN(input_size, self.max_notes, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
-        self.target_net = DQN(input_size, self.max_notes. self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
+        self.target_net = DQN(input_size, self.max_notes, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval()
         self.experience_replay = ReplayMemory(self.capacity)
-        self.expert_replay = None # store expert replay for demonstration
 
-        # track reward and loss
+        # keep track of trainning data
         self.rewards = []
         self.loss = []
         self.steps = []
+        self.epsilon_update = 0
+        self.episode = 0
 
     def _action_policy(self, state):
         if self.noisy_dqn:
@@ -135,18 +136,20 @@ class Agent:
         plt.show()
     
     def saveModel(self, name):
-        torch.save(self.policy_net.state_dict(), f"{name}_network.pth")
+        # ensure the folder exist
+        os.makedirs('./model_results', exist_ok=True)
+        torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network.pth")
 
         torch.save({
             'loss': self.loss,
             'reward': self.rewards,
             'step' : self.steps
-            }, f"{name}_metadata.pth"
+            }, f"./model_results/{name}_metadata.pth"
         )
 
     def loadModel(self, name):
-        self.policy_net.load_state_dict(torch.load(f"{name}_network.pth"))
-        metadata = torch.load(f"{name}_metadata.pth")
+        self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network.pth"))
+        metadata = torch.load(f"./model_results/{name}_metadata.pth")
 
         self.loss = metadata['loss']
         self.rewards = metadata['reward']
@@ -162,16 +165,18 @@ class Agent:
         self.target_net.load_state_dict(target_state_dict)
 
     def train(self, total_episode = 500):
-        for episode in range(1, total_episode+1):
+        self.policy_net.train()
+        for _ in range(total_episode):
             total_loss = 0
             total_reward = 0
             total_step = 0
             done = False
             state = self.env.reset()
+            self.env.pick_random_song()
             # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
             state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
             time_total = time.time()
-            while not done:
+            while not done and self.env.checking_connection():
                 if self.env.song_begin():
                     time_start = time.time()
                     action = self.action_space(state)
@@ -183,45 +188,79 @@ class Agent:
                     
                     done = terminate or truncate
 
-                    # push to experience replay
-                    self.experience_replay.push((state, action, reward, next_state, done))
+                    # push to experience replay where state is not all zeros
+                    if not torch.all(state==0):
+                        if reward.item() != 0 or random.random() < 0.1: # avoid memory to overflow with unimportant state
+                            self.experience_replay.push((state, action, reward, next_state, done))
 
                     time_total += time.time() - time_start
-
-                    # mini update during the song
-                    if self.env.getUpdateSignal():
-                        self.env.pause_game()
-                        # sample and update 25 time
-                        for _ in range(32):
-                            loss = self._update_model() 
-                            if loss is not None:
-                                total_loss += loss
-
-                        self.env.Updated()
-                        self.env.resume_game()
 
                     state = next_state
                     total_step += 1
                     total_reward += reward
+
+                # break when socket connection disconnect or timeout 
+                if self.env.lost_connection() or time.time() - time_total > self.env.getTIMEOUT():
+                    break
                 
-            # big update after the sond ends
-            for _ in range(64):
+            # update after the sond ends
+            for _ in range(25):
                 loss = self._update_model()
                 if loss is not None:
                     total_loss += loss
-        
-            self.env.return_to_song_selection_after_song()
 
             avg_loss = total_loss/total_step
+            self.episode += 1
 
-            if episode%10 == 0:
-                print(f'Epsiode: {episode}: Total Reward: {total_reward}, Loss: {avg_loss}')
+            if self.episode%10 == 0:
+                print(f'Epsiode: {self.episode}: Total Reward: {total_reward}, Loss: {avg_loss}')
                 print(f"Average running time: {time_total/total_step} per step")
 
             self.loss.append(total_loss)
             self.rewards.append(total_reward)
             self.steps.append(total_step)
 
+            self.env.return_to_song_selection_after_song()
+
+    def eval(self):
+        self.policy_net.eval()
+        total_rewards = []
+        songs = []
+        for _ in range(10):
+            done = False
+            episode_reward = 0
+            state = self.env.reset()
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+            self.env.pick_random_song()
+            time_start = time.time()
+            while not done and self.env.checking_connection():
+                with torch.no_grad:
+                    if self.env.song_begin():
+                            action = self.policy_net(state).argmax(dim=2)
+                            next_state, reward, terminate, truncate = self.env.step(action)
+                            
+                            # convert to proper tensor shape
+                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+                            done = terminate or truncate
+                            state = next_state
+                            episode_reward += reward
+
+                    # break when socket connection disconnect or timeout 
+                    if self.env.lost_connection() or time.time() - time_start> self.env.getTIMEOUT():
+                        break
+            
+            total_rewards.append(episode_reward)
+            songs.append(self.env.getSong())
+
+        plt.plot(songs, total_rewards)
+        plt.xlabel('Song Name')
+        plt.ylabel('Reward')
+        plt.title('Rewards Over Each Song')
+        plt.xticks(rotation=45, ha='right')
+        plt.show()
+
+    def GetNetwork(self):
+        return self.policy_net
 
 
     

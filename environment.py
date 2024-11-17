@@ -4,7 +4,6 @@ import numpy as np
 from pynput.keyboard import Controller, Key
 from concurrent.futures import ThreadPoolExecutor
 from helper import SocketListener
-import matplotlib.pyplot as plt
 import torch
 import mss
 import pathlib
@@ -46,67 +45,51 @@ class OsuEnvironment(gym.Env):
         # socket setup
         self.listener = SocketListener()
         self.listener.start()
-        
-        # flag for indicating when can upate the model during the song
-        self.canUpdate = False
-        self.isUpdated = True
-
-        # flag for song ended
-        self.song_ended = False
 
         # remeber the song and mode it select
         self.song = ""
         self.mode = 0
+        self.duration = 0
 
         # song bank for randomize 
-        self._song_dict = {
-            "aresene's bazaar": 1,
-            "candy luv (short ver.)": 2,
-            "flaklypa": 1,
-            "free at last": 1,
-            "heart function": 4,
-            "innocent letter": 1,
-            "liquid (paul rosenthal remix)": 1,
-            "mutsuki akari no yuki": 1,
-            "my love": 1,
-            "never give up": 1,
-            "regret": 5,
-            "renatus": 1,
-            "tear rain": 1,
-            "the light ": 1,
-            "time files": 2,
-            "triangles": 1,
-            "wave feat. aitsuki nakuru": 1
-        }
-
         self.song_dict = {
-            "heart function": 4,
-            "regret": 5,
-        }
-        
-        
+            "aresene's bazaar": [1, 2*60+25],
+            "candy luv (short ver.)": [2, 2*60+12],
+            "flaklypa": [1, 2*60+59],
+            "free at last": [1, 2*60+32],
+            "heart function": [4, 2*60+23],
+            "innocent letter": [1, 3*60+46],
+            "liquid (paul rosenthal remix)": [1, 2*60+38],
+            "mutsuki akari no yuki": [1, 2*60+21],
+            "my love": [2, 3*60+42],
+            "never give up": [1, 2*60+23],
+            "regret": [5, 1*60+58],
+            "renatus": [1, 3*60+28],
+            "tear rain": [1, 4*60+1],
+            "the light ": [1, 1*60+46],
+            "time files": [2, 1*60+38],
+            "triangles": [1, 2*60+1],
+            "wave feat. aitsuki nakuru": [1, 3*60+28]
+        }   
 
     def reset(self):
         self.listener.song_end = None
-        self.song_ended = False
         # time for switching to the game and connection to reset
         time.sleep(10)
         self.currently_hold = [False] * len(self.keys)
         self.invalid = False
-        self.canUpdate = False
-        self.isUpdated = True # disable update when the song just started
         self.observation.clear()
         for _ in range(self.max_notes):
             self.observation.append([0,0,0])
-        
+    
     def checking_connection(self):
         return self.listener.is_listening or self.listener.is_first_connection
     
     def song_begin(self):
-        return self.listener.has_connection and not self.song_ended
+        return self.listener.has_connection
     
-    def _action(self, sctions):
-        return
+    def getSong(self):
+        return f"{self.song}, mode: {self.mode}"
 
     def step(self, actions):
         time_start = time.time()
@@ -130,39 +113,15 @@ class OsuEnvironment(gym.Env):
             time.sleep(self.frame_interval-time_end)
 
         return self.observation, reward, truncate, terminate
-    
-    def pause_game(self):
-        self.executor.submit(self._key_press, Key.esc).result()
 
-    def resume_game(self):
-        self.executor.submit(self._key_press, Key.esc).result()
-        # 3 second waiting to resume the game
-        time.sleep(2.95)
-
-
-    def getUpdateSignal(self):
-        return self.canUpdate and not self.isUpdated
-    
-    def Updated(self):
-        self.isUpdated = True
-
-    def lost_connect(self):
-        return not self.listener.has_connection and not self.song_ended
+    def lost_connection(self):
+        return not self.listener.has_connection
         
     def pick_random_song(self):
-        # clear potential character in search bar resulted from step 
+        # empty search bar
         self.executor.submit(self._key_press, 'a').result()
         self.executor.submit(self._key_press, Key.esc).result()
 
-        # get the the song selection back to the first mode
-        if self.mode > 1:
-            for char in self.song:
-                self.executor.submit(self._key_press, char).result()
-            for _ in range(self.mode-1):
-                self.executor.submit(self._key_press, Key.up).result()
-
-            self.executor.submit(self._key_press, Key.esc).result()
-        
         # get random song
         song_index = np.random.randint(0, len(self.song_dict))
         self.song = list(self.song_dict.keys())[song_index]
@@ -173,22 +132,35 @@ class OsuEnvironment(gym.Env):
 
         time.sleep(1) # time for the search to showup
 
-        self.mode = self.song_dict.get(self.song)
+        self.mode, self.duration = self.song_dict.get(self.song)
 
         if self.mode != 1:
-            self.mode = np.random.randint(1, self.song_dict.get(self.song)+1)
-            print(f"{self.song}:, {self.mode}")
+            self.mode = np.random.randint(1, self.mode+1)
             if self.mode != 1:
                 for _ in range(self.mode-1):
                     self.executor.submit(self._key_press, Key.down).result()
 
         self.executor.submit(self._key_press, Key.enter).result()
-
-        time.sleep(3) #loading screen for the song
+        self.listener.song_duration = self.duration + 15
+        time.sleep(3) # for socket to connect
 
     def return_to_song_selection_after_song(self):
         time.sleep(5) # wait for the fail/success ui to popup
         self.executor.submit(self._key_press, Key.esc).result()
+
+        # clear potential character in search bar resulted from step 
+        self.executor.submit(self._key_press, 'a').result()
+        self.executor.submit(self._key_press, Key.esc).result()
+
+        # get the the song selection back to the first mode
+        if self.mode > 1:
+            for char in self.song:
+                self.executor.submit(self._key_press, char).result()
+            time.sleep(1)
+            for _ in range(self.mode-1):
+                self.executor.submit(self._key_press, Key.up).result()
+
+            self.executor.submit(self._key_press, Key.esc).result()
 
     def _keyboard_action(self, lane, key, action):
         match action:
@@ -235,10 +207,8 @@ class OsuEnvironment(gym.Env):
                 reward = 3
             case 6: # pass
                 terminate = True
-                self.song_ended = True
             case 7: # failure
                 truncate = True
-                self.song_ended = True
                 
         # if there are invalid action
         if self.invalid:
@@ -283,15 +253,10 @@ class OsuEnvironment(gym.Env):
         
             ret.append([class_id, lane, y_center])
 
-        # update is allow when there is no notes so that it is ok to pause the game
         if ret:
             # only care about notes that are near the hit window
             ret = sorted(ret, key=lambda note: (-note[2], note[1]))
             ret = ret[:self.max_notes]
-            self.canUpdate = True
-        else:
-            self.isUpdated = False
-            self.canUpdate = False
 
         # add padding if it is less than max note
         ret += [[0,0,0]] * (self.max_notes - len(ret))
@@ -320,5 +285,5 @@ class OsuEnvironment(gym.Env):
     
     def _key_press(self, key):
         self.keyboard.press(key)
-        time.sleep(0.1)
+        time.sleep(0.2)
         self.keyboard.release(key)
