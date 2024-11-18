@@ -74,7 +74,7 @@ class SocketListener():
     self.has_new_data = threading.Event()
 
     # truncate when connection didn't close after song duration
-    self.song_duration = 0
+    self.song_duration = 1000000
 
   def start(self):
     '''
@@ -110,7 +110,10 @@ class SocketListener():
     Internal function to handle incoming connections
     '''
     try:
+      # reset when new song begin
       time_start = time.time()
+      self.song_end = None
+      self.latest_data = None
       while True:
         # calculate elapsed time
         time_elapsed = time.time() - time_start

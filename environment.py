@@ -53,34 +53,72 @@ class OsuEnvironment(gym.Env):
 
         # song bank for randomize 
         self.song_dict = {
+            "#be_fortunate": [4, 2*60+14],
+            "akkera-country-boy": [7, 1*60+55],
             "aresene's bazaar": [1, 2*60+25],
+            "b.b.k.k.b.k.k. (hurce remix)": [1, 4*60+19],
+            "bassline yatteru? w": [1, 4*60+35],
+            "break the silence": [1, 4*60+24],
+            "burst the gravity (tv size)": [4, 1*60+29],
             "candy luv (short ver.)": [2, 2*60+12],
+            "cyberia lyr 3": [10, 3*60+31],
+            "empire": [4, 2*60+43],
+            "enchanted love": [3, 2*60+8],
+            "eutopia (tv size)": [4, 1*60+31],
             "flaklypa": [1, 2*60+59],
             "free at last": [1, 2*60+32],
-            "heart function": [4, 2*60+23],
+            "ghoul": [8, 4*60+16],
+            "heart function": [4, 2*60+25],
+            "hype feat. such (sky_delta remix)": [1, 3*60+56],
+            "iced tea for breakfast": [3, 1*60+4],
             "innocent letter": [1, 3*60+46],
+            "koiyamai (tv size)": [5, 1*60+39],
+            "liquated": [1, 4*60+20],
             "liquid (paul rosenthal remix)": [1, 2*60+38],
+            "million pp": [1, 7*60+5],
+            "machinegun poem doll": [6, 2*60+15],
+            "memoria reborn": [1, 3*60+43],
+            "mopemope": [3, 1*60+47],
+            "more! jump! more!": [5, 2*60],
             "mutsuki akari no yuki": [1, 2*60+21],
             "my love": [2, 3*60+42],
             "never give up": [1, 2*60+23],
+            "new world": [4, 2*60+2],
+            "otome no route wa hitotsu ja nai! (tv size)": [4, 1*60+26],
+            "palette gamma": [8, 1*60+23],
             "regret": [5, 1*60+58],
             "renatus": [1, 3*60+28],
+            "rpg": [1, 6*60+1],
+            "run*2 run to you!!": [5, 1*60+53],
+            "specialist (cut ver.)": [5, 2*60+35],
+            "suki yo ~two hearts~": [4, 3*60+30],
             "tear rain": [1, 4*60+1],
-            "the light ": [1, 1*60+46],
+            "teo": [4, 3*60+22],
+            "the empress": [4, 4*60+5],
+            "the light": [1, 1*60+46],
             "time files": [2, 1*60+38],
             "triangles": [1, 2*60+1],
-            "wave feat. aitsuki nakuru": [1, 3*60+28]
+            "tsuioku no bara": [1, 5*60+26],
+            "victorious journey": [1, 3*60+54],
+            "wave feat. aitsuki nakuru": [1, 3*60+28],
+            "we could get more machinegun psystyle! (and more genre switches)": [5, 5*60+15],
+            "yuriyurarararayuruyuri daijiken (tv size)": [4, 1*60+26]
         }   
 
     def reset(self):
-        self.listener.song_end = None
         # time for switching to the game and connection to reset
         time.sleep(10)
         self.currently_hold = [False] * len(self.keys)
         self.invalid = False
         self.observation.clear()
+        note_vectors = []
         for _ in range(self.max_notes):
-            self.observation.append([0,0,0])
+            note_vectors.append([0,0,0])
+
+        for _ in range(self.observation.maxlen):
+            self.observation.append(note_vectors)
+
+        return self.observation
     
     def checking_connection(self):
         return self.listener.is_listening or self.listener.is_first_connection
@@ -90,7 +128,7 @@ class OsuEnvironment(gym.Env):
     
     def getSong(self):
         return f"{self.song}, mode: {self.mode}"
-
+    
     def step(self, actions):
         time_start = time.time()
         reward = 0
@@ -141,8 +179,10 @@ class OsuEnvironment(gym.Env):
                     self.executor.submit(self._key_press, Key.down).result()
 
         self.executor.submit(self._key_press, Key.enter).result()
-        self.listener.song_duration = self.duration + 15
+        self.listener.song_duration = self.duration + 30
         time.sleep(3) # for socket to connect
+
+        self.executor.submit(self._skip_cutscene, 5)
 
     def return_to_song_selection_after_song(self):
         time.sleep(5) # wait for the fail/success ui to popup
@@ -218,8 +258,6 @@ class OsuEnvironment(gym.Env):
         return reward, truncate, terminate
 
     def _vision_setup(self):
-        self.DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
         pathlib.PosixPath = pathlib.WindowsPath # https://github.com/ultralytics/yolov5/issues/10240#issuecomment-1662573188
         self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='./models/best.pt', force_reload=True)  
 
@@ -274,6 +312,8 @@ class OsuEnvironment(gym.Env):
         self.observation.append(vision_thread.result())
 
     def _perform_action(self, actions):
+        if isinstance(actions, torch.Tensor): 
+            actions = actions.tolist()
         if self.song_begin:
             keys = []
             for lane in range(len(actions)):
@@ -287,3 +327,7 @@ class OsuEnvironment(gym.Env):
         self.keyboard.press(key)
         time.sleep(0.2)
         self.keyboard.release(key)
+
+    def _skip_cutscene(self, sec):
+        time.sleep(sec)
+        self._key_press(Key.space)

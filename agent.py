@@ -1,4 +1,4 @@
-from utils import DQN, ReplayMemory
+from model import ReplayMemory
 import random
 import numpy as np
 import torch
@@ -12,7 +12,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Agent:
     def __init__(self, 
-                 env, 
+                 env,
+                 policy_net,
+                 target_net,
                  criterion, 
                  optimizer, 
                  discount_factor=0.99, 
@@ -22,9 +24,7 @@ class Agent:
                  target_update_rate=0.005, 
                  batch_size=128, 
                  capacity=10000,
-                 dueling_dqn=False,
-                 noisy_dqn=False,
-                 std_init=0.5):
+                 noisy_dqn=False):
         
         #define the environment
         self.env = env
@@ -45,11 +45,8 @@ class Agent:
         self.noisy_dqn = noisy_dqn
 
         # define the dqn
-        input_size = self.observation_space.shape[0]
-        self.max_notes = self.observation_space.shape[1]
-        self.policy_net = DQN(input_size, self.max_notes, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
-        self.target_net = DQN(input_size, self.max_notes, self.action_space.nvec, dueling=dueling_dqn, noisy=noisy_dqn, std_init=std_init).to(device)
-        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.policy_net = policy_net
+        self.target_net = target_net
         self.target_net.eval()
         self.experience_replay = ReplayMemory(self.capacity)
 
@@ -166,7 +163,7 @@ class Agent:
 
     def train(self, total_episode = 500):
         self.policy_net.train()
-        for _ in range(total_episode):
+        for episode in range(1, total_episode+1):
             total_loss = 0
             total_reward = 0
             total_step = 0
@@ -174,16 +171,18 @@ class Agent:
             state = self.env.reset()
             self.env.pick_random_song()
             # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
+            print(state.shape)
             time_total = time.time()
             while not done and self.env.checking_connection():
                 if self.env.song_begin():
                     time_start = time.time()
-                    action = self.action_space(state)
+                    action = self._action_policy(state)
                     next_state, reward, terminate, truncate = self.env.step(action)
                     
                     # convert to proper tensor shape
-                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
+                    print(next_state.shape)
                     reward = torch.tensor([reward], device=device)
                     
                     done = terminate or truncate
@@ -199,8 +198,8 @@ class Agent:
                     total_step += 1
                     total_reward += reward
 
-                # break when socket connection disconnect or timeout 
-                if self.env.lost_connection() or time.time() - time_total > self.env.getTIMEOUT():
+                # break when socket connection disconnect
+                if self.env.lost_connection():
                     break
                 
             # update after the sond ends
@@ -222,6 +221,10 @@ class Agent:
 
             self.env.return_to_song_selection_after_song()
 
+            if episode == total_episode:
+                self.keyboard.type("Finish training")
+
+
     def eval(self):
         self.policy_net.eval()
         total_rewards = []
@@ -230,9 +233,8 @@ class Agent:
             done = False
             episode_reward = 0
             state = self.env.reset()
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+            state = torch.tensor(state, dtype=torch.float32, device=device).view(1, self.observation_space.shape[0], -1).unsqueeze(0)
             self.env.pick_random_song()
-            time_start = time.time()
             while not done and self.env.checking_connection():
                 with torch.no_grad:
                     if self.env.song_begin():
@@ -240,13 +242,13 @@ class Agent:
                             next_state, reward, terminate, truncate = self.env.step(action)
                             
                             # convert to proper tensor shape
-                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.max_notes, -1)
+                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).view(1, self.observation_space.shape[0], -1).unsqueeze(0)
                             done = terminate or truncate
                             state = next_state
                             episode_reward += reward
 
                     # break when socket connection disconnect or timeout 
-                    if self.env.lost_connection() or time.time() - time_start> self.env.getTIMEOUT():
+                    if self.env.lost_connection():
                         break
             
             total_rewards.append(episode_reward)
@@ -258,9 +260,5 @@ class Agent:
         plt.title('Rewards Over Each Song')
         plt.xticks(rotation=45, ha='right')
         plt.show()
-
-    def GetNetwork(self):
-        return self.policy_net
-
 
     
