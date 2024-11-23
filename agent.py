@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pynput.keyboard import Controller
 import os
+from collections import deque
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -24,12 +25,15 @@ class DQN_Agent:
                  batch_size=128, 
                  capacity=10000,
                  noisy_dqn=False,
-                 lstm = False):
+                 lstm = False, 
+                 behavior_cloning = False):
         
         #define the environment
         self.env = env
         self.observation_space = env.observation_space
         self.action_space = env.action_space
+        self.max_notes = self.env.max_notes
+        self.num_frame = self.env.num_frame
         self.keyboard = Controller()
         
         # define hyperparameter
@@ -43,12 +47,14 @@ class DQN_Agent:
         self.batch_size = batch_size
         self.capacity = capacity
         self.noisy_dqn = noisy_dqn
+        self.behavior_cloning = behavior_cloning
 
         # define the dqn
         self.policy_net = policy_net
         self.target_net = target_net
         self.target_net.eval()
         self.experience_replay = ReplayMemory(self.capacity)
+        self.expert_replay = ReplayMemory()
         self.lstm = lstm
         self.hidden = None
 
@@ -58,6 +64,9 @@ class DQN_Agent:
         self.steps = []
         self.epsilon_update = 0
         self.episode = 0
+
+        if self.behavior_cloning:
+            self._get_expert_demo()
 
     def _action_policy(self, state):
         with torch.no_grad():
@@ -78,6 +87,59 @@ class DQN_Agent:
             else:
                 return action
     
+    def _get_expert_demo(self):
+        folder_path = "./exper_demo"
+        for file_name in os.listdir(folder_path):
+            if file_name.endswith(".pth"):
+                file_path = os.path.join(folder_path, file_name)
+                replay = torch.load(file_path)
+                self._update_expert_replay(replay)
+
+    def _update_expert_replay(self, replay):
+        states = []
+        next_states = []
+        rewards = []
+        done = []
+
+        frames = replay["frame"]
+        actions = replay["action"]
+        hit_types = replay["hit_type"]
+
+        note_vector = [0,0,0] * self.max_notes
+        state = deque(maxlen=self.num_frame)
+        next_state = deque(maxlen=self.num_frame)
+
+        for _ in range(self.num_frame):
+            state.append(note_vector)
+            next_state.append(note_vector)
+
+        for i in range(len(frames)):
+            note_vector = frames[i] 
+            note_vector = note_vector[:self.max_notes]
+            note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+            state.append(note_vector)
+            states.append(state)
+
+            hit_type = hit_types[i]
+            reward, truncate, terminate = 0, False, False
+            if hit_type is not None:
+                reward, truncate, terminate = self.env._get_reward(hit_type)
+            done_temp = truncate or terminate
+            rewards.append(reward)
+            done.append(done_temp)
+
+            if i + 1 < len(frames):
+                note_vector = frames[i+1] 
+                note_vector = note_vector[:self.max_notes]
+                note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+                next_state.append(note_vector)
+                next_states.append(next_state)
+            else:
+                next_states.append(None)
+        
+        self.expert_replay.push(states, actions, rewards, next_states, done)
+
+
     def _update_model(self):
         if len(self.experience_replay) < self.batch_size:
             return
@@ -201,14 +263,14 @@ class DQN_Agent:
             state = self.env.reset()
             self.env.pick_random_song()
             # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
             while not done and self.env.checking_connection():
                 if self.env.song_begin():
                     action = self._action_policy(state)
                     next_state, reward, terminate, truncate = self.env.step(action)
                     
                     # convert to proper tensor shape
-                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
+                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
                     total_reward += reward
                     reward = torch.tensor([reward], device=device)
                     
@@ -262,7 +324,7 @@ class DQN_Agent:
             episode_reward = 0
             episode_steps = 0
             state = self.env.reset()
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
             self.env.pick_random_song()
             while not done and self.env.checking_connection():
                 with torch.no_grad():
@@ -276,7 +338,7 @@ class DQN_Agent:
                             next_state, reward, terminate, truncate = self.env.step(action, train=False)
                             
                             # convert to proper tensor shape
-                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
+                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
                             done = terminate or truncate
                             state = next_state
                             episode_reward += reward

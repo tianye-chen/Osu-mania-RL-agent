@@ -118,14 +118,15 @@ class LSTM_PPO(nn.Module):
     def forward(self, x, hidden_state=None):
         lstm_out, hidden_state = self.lstm(x, hidden_state)
         lstm_out = lstm_out[:, -1, :]
-        logits = [actor(lstm_out) for actor in self.actors]
+        logits = [actor(lstm_out).unsqueeze(1) for actor in self.actors]
+        logits = torch.cat(logits, dim=1)
         value = self.critic(lstm_out)
 
         return logits, value, hidden_state
 
         
 class ReplayMemory:
-    def __init__(self, capacity, ppo = False):
+    def __init__(self, capacity=None, ppo = False):
         self.memory = deque(maxlen=capacity)
         self.ppo = ppo
     
