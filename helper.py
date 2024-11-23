@@ -98,7 +98,7 @@ class SocketListener():
         
         conn, addr = self.sock.accept()
         conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
-        print(f'Connection from {addr}')
+        #print(f'Connection from {addr}') disable print during tranining
         self.has_connection = True
         self._handle_connection(conn, addr)
     except Exception as e:
@@ -137,7 +137,8 @@ class SocketListener():
         if not data:
           self.song_end = 7
           break
-
+    
+    # disable print during tranining
     except ConnectionResetError:
       print(f'Connection reset by {addr}')
     except Exception as e:
@@ -147,7 +148,7 @@ class SocketListener():
       conn.close()
       self.has_connection = False
       self.is_first_connection = False
-      print(f'Connection closed.')
+      # print(f'Connection closed.')
       
   def stop(self):
     self.stop_requested = True

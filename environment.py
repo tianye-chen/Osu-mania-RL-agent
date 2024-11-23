@@ -11,7 +11,7 @@ from collections import deque
 import time
 
 class OsuEnvironment(gym.Env):
-    def __init__(self):
+    def __init__(self, num_frame = 4, max_notes = 8):
         # set frame per second
         self.frame_interval = 1 / 15
 
@@ -22,18 +22,20 @@ class OsuEnvironment(gym.Env):
         self.keys = ['s', 'd', 'k', 'l']
 
         # stacked frames of notes
-        self.observation = deque(maxlen=4)
+        self.observation = deque(maxlen=num_frame)
 
-        # returns 4 stacked of list of note vectors in [type, lane, y position]
+        # returns n stacked of list of note vectors in [type, lane, y position]
         # maximum notes return
-        self.max_notes = 8
-        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(4, self.max_notes, 3), dtype=np.float32)
+        self.num_frame = num_frame
+        self.max_notes = max_notes
+        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(self.num_frame, self.max_notes, 3), dtype=np.float32)
 
         # 4 lane where each note can do nothing, pressed, held or release
         self.action_space = spaces.MultiDiscrete([4]*len(self.keys))
         
-        # keep track of which key is hold
+        # keep track of which key is hold and if key is pressed
         self.currently_hold = [False] * len(self.keys)
+        self.key_pressed = False
 
         # check for invalid key press
         self.invalid = False
@@ -115,7 +117,7 @@ class OsuEnvironment(gym.Env):
         for _ in range(self.max_notes):
             note_vectors.append([0,0,0])
 
-        for _ in range(self.observation.maxlen):
+        for _ in range(self.num_frame):
             self.observation.append(note_vectors)
 
         return self.observation
@@ -129,7 +131,7 @@ class OsuEnvironment(gym.Env):
     def getSong(self):
         return f"{self.song}, mode: {self.mode}"
     
-    def step(self, actions):
+    def step(self, actions, train=True):
         time_start = time.time()
         reward = 0
         truncate = False
@@ -143,11 +145,14 @@ class OsuEnvironment(gym.Env):
 
         if data is not None:
             reward, truncate, terminate = self._get_reward(data)
+        else:
+            if not self.key_pressed:
+                reward += 0.1 # reward for not pressing when no note is near
 
         # ensure that each step represents proper FS frame
         time_end = time.time() - time_start
 
-        if time_end < self.frame_interval:
+        if time_end < self.frame_interval and train:
             time.sleep(self.frame_interval-time_end)
 
         return self.observation, reward, truncate, terminate
@@ -215,11 +220,13 @@ class OsuEnvironment(gym.Env):
                 else:
                     self.keyboard.press(key)
                     self.keyboard.release(key)
+                    self.key_pressed = True
             case 2: # hold
                 if self.currently_hold[lane]:
                     return
                 self.keyboard.press(key)
                 self.currently_hold[lane] = True
+                self.key_pressed = True
             case 3: # release
                 if self.currently_hold[lane]:
                     self.keyboard.release(key)
@@ -242,9 +249,9 @@ class OsuEnvironment(gym.Env):
             case 3: # good
                 reward = 1
             case 4: # great
-                reward = 2
+                reward = 4
             case 5: # perfect
-                reward = 3
+                reward = 6
             case 6: # pass
                 terminate = True
             case 7: # failure
@@ -252,7 +259,7 @@ class OsuEnvironment(gym.Env):
                 
         # if there are invalid action
         if self.invalid:
-            reward += -10
+            reward += -5
             self.invalid = False
 
         return reward, truncate, terminate
@@ -312,15 +319,18 @@ class OsuEnvironment(gym.Env):
         self.observation.append(vision_thread.result())
 
     def _perform_action(self, actions):
-        if isinstance(actions, torch.Tensor): 
-            actions = actions.tolist()
-        if self.song_begin:
-            keys = []
-            for lane in range(len(actions)):
-                key = self.executor.submit(self._keyboard_action, lane, self.keys[lane], actions[lane])
-                keys.append(key)
+        if isinstance(actions, torch.Tensor):
+            actions = actions.squeeze(0)
+            actions = actions.cpu().tolist()
 
-            for key in keys:
+        if self.song_begin:
+            threads = []
+            self.key_pressed = False
+            for lane in range(len(actions)):
+                key_thread = self.executor.submit(self._keyboard_action, lane, self.keys[lane], actions[lane])
+                threads.append(key_thread)
+
+            for key in threads:
                 key.result()
     
     def _key_press(self, key):

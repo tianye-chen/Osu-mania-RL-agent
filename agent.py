@@ -4,13 +4,12 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 import pandas as pd
-import time
 from pynput.keyboard import Controller
 import os
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class Agent:
+class DQN_Agent:
     def __init__(self, 
                  env,
                  policy_net,
@@ -24,7 +23,8 @@ class Agent:
                  target_update_rate=0.005, 
                  batch_size=128, 
                  capacity=10000,
-                 noisy_dqn=False):
+                 noisy_dqn=False,
+                 lstm = False):
         
         #define the environment
         self.env = env
@@ -49,6 +49,8 @@ class Agent:
         self.target_net = target_net
         self.target_net.eval()
         self.experience_replay = ReplayMemory(self.capacity)
+        self.lstm = lstm
+        self.hidden = None
 
         # keep track of trainning data
         self.rewards = []
@@ -58,24 +60,29 @@ class Agent:
         self.episode = 0
 
     def _action_policy(self, state):
+        with torch.no_grad():
+            if self.lstm:
+                q_values, self.hidden = self.policy_net(state, self.hidden)
+                action = q_values.argmax(dim=2)
+            else:
+                action = self.policy_net(state).argmax(dim=2)
+
         if self.noisy_dqn:
-            with torch.no_grad():
-                return self.policy_net(state).argmax(dim=2)
+                return action
         else:
             sample = random.random()
             epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-1. * self.epsilon_update/self.epsilon_decay)
             self.epsilon_update += 1
             if sample < epsilon:
-                return torch.tensor(self.action_space.sample(), dtype=torch.long, device=device)
+                return torch.tensor(self.action_space.sample(), dtype=torch.long, device=device).unsqueeze(0)
             else:
-                with torch.no_grad():
-                    return self.policy_net(state).argmax(dim=2)
+                return action
     
     def _update_model(self):
         if len(self.experience_replay) < self.batch_size:
             return
         
-        transitions= self.memory.sample(self.batch_size)
+        transitions= self.experience_replay.sample(self.batch_size)
         state_batch, action_batch, reward_batch, next_state_batch, done_batch = zip(*transitions)
         state_batch = torch.cat(state_batch)
         action_batch = torch.cat(action_batch)
@@ -86,14 +93,24 @@ class Agent:
         non_final_next_states = torch.cat([s for s, done in zip(next_state_batch, done_batch) if not done])
 
         # compute q values
-        q_values = self.policy_net(state_batch).gather(2, action_batch.unsqueeze(2)).squeeze(2)
+        if self.lstm:
+            q_values, _ = self.policy_net(state_batch)
+            q_values = q_values.gather(2, action_batch.unsqueeze(2)).squeeze(2)
+        else:
+            q_values = self.policy_net(state_batch).gather(2, action_batch.unsqueeze(2)).squeeze(2)
 
         # compute expect q values
         next_state_values = torch.zeros_like(q_values, device=device)
         with torch.no_grad():
-            next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(dim=2).values
+            if self.lstm:
+                next_q_values, _ = self.target_net(non_final_next_states)
+                next_q_values = next_q_values.max(dim=2).values
+            else:
+                next_q_values = self.target_net(non_final_next_states).max(dim=2).values
+                
+            next_state_values[non_final_mask] = next_q_values
 
-        expected_q_values = (next_state_values * self.discount_factor) + reward_batch
+        expected_q_values = (next_state_values * self.discount_factor) + reward_batch.unsqueeze(1)
 
         # compute lose
         loss = self.criterion(q_values, expected_q_values)
@@ -103,7 +120,8 @@ class Agent:
         loss.backward()
 
         # gradient clipping
-        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+        if not self.lstm:
+            torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
 
         self.optimizer.step()
 
@@ -131,6 +149,13 @@ class Agent:
         plt.ylabel('Loss Value')
         plt.title('Loss Values Over Episodes')
         plt.show()
+
+        average_steps = self._smooth_data(self.steps)
+        plt.plot(average_steps)
+        plt.xlabel('Episode')
+        plt.ylabel('Steps')
+        plt.title('Steps Over Episodes')
+        plt.show()
     
     def saveModel(self, name):
         # ensure the folder exist
@@ -143,6 +168,7 @@ class Agent:
             'step' : self.steps
             }, f"./model_results/{name}_metadata.pth"
         )
+        print("Model Saved")
 
     def loadModel(self, name):
         self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network.pth"))
@@ -151,6 +177,8 @@ class Agent:
         self.loss = metadata['loss']
         self.rewards = metadata['reward']
         self.steps = metadata['step']
+
+        print("Model Loaded")
 
     def _soft_update(self):
          # soft update of the target's weights
@@ -167,55 +195,53 @@ class Agent:
             total_loss = 0
             total_reward = 0
             total_step = 0
+            update_count = 0
             done = False
+            self.hidden = None
             state = self.env.reset()
             self.env.pick_random_song()
             # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
             state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
-            print(state.shape)
-            time_total = time.time()
             while not done and self.env.checking_connection():
                 if self.env.song_begin():
-                    time_start = time.time()
                     action = self._action_policy(state)
                     next_state, reward, terminate, truncate = self.env.step(action)
                     
                     # convert to proper tensor shape
                     next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
-                    print(next_state.shape)
+                    total_reward += reward
                     reward = torch.tensor([reward], device=device)
                     
                     done = terminate or truncate
 
                     # push to experience replay where state is not all zeros
                     if not torch.all(state==0):
-                        if reward.item() != 0 or random.random() < 0.1: # avoid memory to overflow with unimportant state
-                            self.experience_replay.push((state, action, reward, next_state, done))
-
-                    time_total += time.time() - time_start
+                        if reward.item() != 0 or random.random() < 0.5: # avoid memory to overflow with unimportant state
+                            self.experience_replay.push(state, action, reward, next_state, done)
+                            update_count += 1
 
                     state = next_state
                     total_step += 1
-                    total_reward += reward
 
                 # break when socket connection disconnect
                 if self.env.lost_connection():
                     break
                 
             # update after the sond ends
-            for _ in range(25):
+            count = 0
+            for _ in range(int(update_count/2)):
                 loss = self._update_model()
                 if loss is not None:
                     total_loss += loss
+                    count += 1
 
-            avg_loss = total_loss/total_step
+            avg_loss = total_loss/count if count > 0 else 0
             self.episode += 1
 
             if self.episode%10 == 0:
                 print(f'Epsiode: {self.episode}: Total Reward: {total_reward}, Loss: {avg_loss}')
-                print(f"Average running time: {time_total/total_step} per step")
 
-            self.loss.append(total_loss)
+            self.loss.append(avg_loss)
             self.rewards.append(total_reward)
             self.steps.append(total_step)
 
@@ -225,34 +251,49 @@ class Agent:
                 self.keyboard.type("Finish training")
 
 
-    def eval(self):
+    def eval(self, total_episode):
         self.policy_net.eval()
         total_rewards = []
         songs = []
-        for _ in range(10):
+        total_steps = []
+        self.hidden = None
+        for episode in range(1, total_episode+1):
             done = False
             episode_reward = 0
+            episode_steps = 0
             state = self.env.reset()
-            state = torch.tensor(state, dtype=torch.float32, device=device).view(1, self.observation_space.shape[0], -1).unsqueeze(0)
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
             self.env.pick_random_song()
             while not done and self.env.checking_connection():
-                with torch.no_grad:
+                with torch.no_grad():
                     if self.env.song_begin():
-                            action = self.policy_net(state).argmax(dim=2)
-                            next_state, reward, terminate, truncate = self.env.step(action)
+                            if self.lstm:
+                                q_values, self.hidden = self.policy_net(state, self.hidden)
+                                action = q_values.argmax(dim=2)
+                            else:
+                                action = self.policy_net(state).argmax(dim=2)
+
+                            next_state, reward, terminate, truncate = self.env.step(action, train=False)
                             
                             # convert to proper tensor shape
-                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).view(1, self.observation_space.shape[0], -1).unsqueeze(0)
+                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.observation_space.shape[0], -1)
                             done = terminate or truncate
                             state = next_state
                             episode_reward += reward
+                            episode_steps += 1
 
                     # break when socket connection disconnect or timeout 
                     if self.env.lost_connection():
                         break
             
             total_rewards.append(episode_reward)
+            total_steps.append(episode_steps)
             songs.append(self.env.getSong())
+
+            self.env.return_to_song_selection_after_song()
+
+            if episode == total_episode:
+                self.keyboard.type("Finish evaluating")
 
         plt.plot(songs, total_rewards)
         plt.xlabel('Song Name')
@@ -261,4 +302,43 @@ class Agent:
         plt.xticks(rotation=45, ha='right')
         plt.show()
 
-    
+        plt.plot(songs, total_steps)
+        plt.xlabel('Song Name')
+        plt.ylabel('Step')
+        plt.title('Steps Over Each Song')
+        plt.xticks(rotation=45, ha='right')
+        plt.show()
+
+class PPO_Agent:
+    def __init__(self, 
+                 env,
+                 policy_net,
+                 optimizer, 
+                 discount_factor=0.99, 
+                 batch_size=128, 
+                 capacity=10000,
+                 clip_epsilon=0.2
+                 ):
+        
+        #define the environment
+        self.env = env
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+        self.keyboard = Controller()
+
+        # define hyperparameter
+        self.optimizer = optimizer
+        self.discount_factor = discount_factor
+        self.batch_size = batch_size
+        self.capacity = capacity
+        self.clip_epsilon = clip_epsilon
+
+        # define PPO
+        self.policy_net = policy_net
+        self.memory = ReplayMemory(5000)
+
+        # keep track of trainning data
+        self.rewards = []
+        self.loss = []
+        self.steps = []
+        self.episode = 0
