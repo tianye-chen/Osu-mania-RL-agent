@@ -105,7 +105,7 @@ class DQN_Agent:
         actions = replay["action"]
         hit_types = replay["hit_type"]
 
-        note_vector = [0,0,0] * self.max_notes
+        note_vector = [[0,0,0]] * self.max_notes
         state = deque(maxlen=self.num_frame)
         next_state = deque(maxlen=self.num_frame)
 
@@ -117,8 +117,12 @@ class DQN_Agent:
             note_vector = frames[i] 
             note_vector = note_vector[:self.max_notes]
             note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+
             state.append(note_vector)
+            next_state.append(note_vector)
+
             states.append(state)
+            next_states.append(next_state)
 
             hit_type = hit_types[i]
             reward, truncate, terminate = 0, False, False
@@ -132,10 +136,13 @@ class DQN_Agent:
                 note_vector = frames[i+1] 
                 note_vector = note_vector[:self.max_notes]
                 note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+
                 next_state.append(note_vector)
                 next_states.append(next_state)
             else:
-                next_states.append(None)
+                note_vector = [[0,0,0]] * self.max_notes
+                next_state.append(note_vector)
+                next_states.append(next_state)
         
         self.expert_replay.push(states, actions, rewards, next_states, done)
 
