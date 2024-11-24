@@ -80,7 +80,6 @@ class OsuEnvironment(gym.Env):
             "million pp": [1, 7*60+5],
             "machinegun poem doll": [6, 2*60+15],
             "memoria reborn": [1, 3*60+43],
-            "mopemope": [3, 1*60+47],
             "more! jump! more!": [5, 2*60],
             "mutsuki akari no yuki": [1, 2*60+21],
             "my love": [2, 3*60+42],
