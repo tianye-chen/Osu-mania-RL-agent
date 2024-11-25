@@ -36,7 +36,7 @@ def split_frames(in_path, out_path):
   
 class DataQueue:
   '''
-  Simple queue
+  Simple queue, usually used to store reward data between frames
   '''
   def __init__(self):
     self.queue = []
@@ -100,6 +100,8 @@ class SocketListener():
   def start(self, data_handler=None):
     '''
     Starts the socket listener
+    
+    data_handler: a callback function that receives reward data
     '''
     self.data_handler = data_handler
     threading.Thread(target=self._listen, daemon=True).start()
