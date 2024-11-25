@@ -5,8 +5,12 @@ import socket
 import numpy as np
 import threading
 import time
+import mss
 
 def split_frames(in_path, out_path):
+  '''
+  Splits video into frames, used for vision model training
+  '''
   vid = cv2.VideoCapture(in_path)
   frame_idx = 0
   
@@ -29,6 +33,22 @@ def split_frames(in_path, out_path):
     
   vid.release()
   print(f"Wrote {frame_idx} frames to /{out_path}")
+  
+class DataQueue:
+  '''
+  Simple queue, usually used to store hit type data between frames
+  '''
+  def __init__(self):
+    self.queue = []
+    
+  def add(self, data):
+    self.queue.append(data)
+    
+  def get(self):
+    return self.queue
+  
+  def clear(self):
+    self.queue = []
 
 class SocketListener():
   def __init__(self, server='127.0.0.1', port=5555):
@@ -54,6 +74,7 @@ class SocketListener():
     self.sock = None
     self.latest_data = None
     self.song_end = None
+    self.data_handler = None
 
     #### Flags
     
@@ -76,10 +97,13 @@ class SocketListener():
     # truncate when connection didn't close after song duration
     self.song_duration = 1000000
 
-  def start(self):
+  def start(self, data_handler=None):
     '''
     Starts the socket listener
+    
+    data_handler: a callback function that receives hit type data
     '''
+    self.data_handler = data_handler
     threading.Thread(target=self._listen, daemon=True).start()
     
   def _listen(self):
@@ -126,6 +150,9 @@ class SocketListener():
           self.latest_data = int.from_bytes(data, byteorder='little')
 
           self.has_new_data.set() # signal that new data has arrived
+          
+          if self.data_handler:
+            self.data_handler(self.latest_data)
 
           if self.latest_data in {6,7}:
             self.song_end = self.latest_data
@@ -164,7 +191,7 @@ class SocketListener():
     else:
       print('Socket listener is not running.')
   
-  def fetch_data(self, action_func, timeout):
+  def fetch_data(self, timeout, action_func=None):
     """
       Fetches data specifically after performing an action.
       action_func: function that triggers the keyboard action
@@ -174,7 +201,8 @@ class SocketListener():
     self.has_new_data.clear()
 
     # perform the action function
-    action_func()
+    if action_func:
+      action_func()
 
     # wait for new data within timeout
     if self.has_new_data.wait(timeout=timeout):
@@ -183,3 +211,99 @@ class SocketListener():
       return self.song_end
     else:
       return None # no data received
+    
+def preprocess_actions(actions):
+    """
+    Preprocess actions into shape [4,4,4,4]
+    """
+    key_hold = [False] * 4
+    map_key = {"s": 0, "d" : 1, "k" : 2, "l" : 3}
+    clean_actions = []
+    for i in range(len(actions)):
+        chars = actions[i]
+        action = [0, 0, 0, 0]
+
+        if chars == []:
+            clean_actions.append(action)
+            continue
+
+        for char in chars:
+            key = map_key.get(char)
+            if key is None:
+                continue
+            
+            if not key_hold[key]:
+                action[key] = 1
+            else:
+                action[key] = 2
+
+            if i + 1 < len(actions):
+                if char not in actions[i+1]:
+                    if key_hold[key]:
+                        action[key] = 3            
+                else:
+                    key_hold[key] = True
+                    action[key] = 2
+                
+        clean_actions.append(action)
+    
+    return clean_actions
+  
+def detect(img, model):
+  '''
+  Returns list of notes in the form of [class_id, lane, y_center] for a given image
+  '''
+  lanes = {
+    0 : (10, 180),
+    1 : (150, 320),
+    2 : (300, 470),
+    3 : (440, 610)
+  }
+  ret = []  
+  res = model(img)
+  
+  for box in res.xyxy[0]:
+    # Confidence level is less than 50%
+    if box[4] < 0.50:
+      continue
+    
+    x_center = int((box[0] + box[2]) / 2)
+    y_center = int((box[1] + box[3]) / 2)
+    class_id = int(box[5]) # classes are 0: end_hold, 1: note, 2: start_hold
+    
+    # Identify the lane of the note based on x_center
+    for lane, (start, end) in lanes.items():
+      if start <= x_center <= end:
+        break
+    
+    ret.append([class_id, lane, y_center])
+  
+  if ret:
+    ret = sorted(ret, key=lambda note: (-note[2], note[1]))
+
+  return ret 
+
+def capture(region):
+  with mss.mss() as sct:
+    return sct.grab(region)
+  
+def pad_inner_array(arr, pad_value, pad_len):
+  '''
+  Pads inner arrays of a 2d array
+  
+  arr: 2d array
+  pad_value: value to pad with
+  pad_len: length to pad to
+  
+  '''
+  padded = []
+  
+  for inner in arr:
+    inner = inner + [pad_value] * (pad_len - len(inner))
+    
+    if len(inner) > pad_len:
+      inner = inner[:pad_len]
+      
+    padded.append(inner)
+    
+  return padded
