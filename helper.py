@@ -97,7 +97,7 @@ class SocketListener():
     # truncate when connection didn't close after song duration
     self.song_duration = 1000000
 
-  def start(self, data_handler):
+  def start(self, data_handler=None):
     '''
     Starts the socket listener
     '''
