@@ -36,7 +36,7 @@ def split_frames(in_path, out_path):
   
 class DataQueue:
   '''
-  Simple queue, usually used to store reward data between frames
+  Simple queue, usually used to store hit type data between frames
   '''
   def __init__(self):
     self.queue = []
@@ -101,7 +101,7 @@ class SocketListener():
     '''
     Starts the socket listener
     
-    data_handler: a callback function that receives reward data
+    data_handler: a callback function that receives hit type data
     '''
     self.data_handler = data_handler
     threading.Thread(target=self._listen, daemon=True).start()
@@ -299,7 +299,7 @@ def pad_inner_array(arr, pad_value, pad_len):
   padded = []
   
   for inner in arr:
-    inner += [pad_value] * (pad_len - len(inner))
+    inner = inner + [pad_value] * (pad_len - len(inner))
     padded.append(inner)
     
   return padded
