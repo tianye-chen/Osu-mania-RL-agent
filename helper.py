@@ -249,15 +249,15 @@ def preprocess_actions(actions):
     
     return clean_actions
   
-def detect(img, model):
+def detect(img, model, normalize=False):
   '''
   Returns list of notes in the form of [class_id, lane, y_center] for a given image
   '''
   lanes = {
-    0 : (10, 180),
-    1 : (150, 320),
-    2 : (300, 470),
-    3 : (440, 610)
+    1 : (10, 180),
+    2 : (150, 320),
+    3 : (300, 470),
+    4 : (440, 610)
   }
   ret = []  
   res = model(img)
@@ -269,12 +269,15 @@ def detect(img, model):
     
     x_center = int((box[0] + box[2]) / 2)
     y_center = int((box[1] + box[3]) / 2)
-    class_id = int(box[5]) # classes are 0: end_hold, 1: note, 2: start_hold
+    class_id = int(box[5])+1 # classes are 1: end_hold, 2: note, 3: start_hold
     
     # Identify the lane of the note based on x_center
     for lane, (start, end) in lanes.items():
       if start <= x_center <= end:
         break
+    
+    if normalize:
+      y_center = y_center/100.0
     
     ret.append([class_id, lane, y_center])
   
