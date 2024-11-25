@@ -300,6 +300,10 @@ def pad_inner_array(arr, pad_value, pad_len):
   
   for inner in arr:
     inner = inner + [pad_value] * (pad_len - len(inner))
+    
+    if len(inner) > pad_len:
+      inner = inner[:pad_len]
+      
     padded.append(inner)
     
   return padded
