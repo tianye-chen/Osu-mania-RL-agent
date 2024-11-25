@@ -140,7 +140,7 @@ class OsuEnvironment(gym.Env):
         self._notes_detection()
 
         # take action based on the given actions simultaneously and fetech the hit type after action
-        data = self.listener.fetch_data(action_fuc=lambda: self._perform_action(actions), timeout=0.02)
+        data = self.listener.fetch_data(action_func=lambda: self._perform_action(actions), timeout=0.02)
 
         if data is not None:
             reward, truncate, terminate = self._get_reward(data)

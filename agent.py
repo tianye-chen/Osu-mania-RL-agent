@@ -15,7 +15,6 @@ class DQN_Agent:
                  env,
                  policy_net,
                  target_net,
-                 criterion, 
                  optimizer, 
                  discount_factor=0.99, 
                  epsilon_decay=100, 
@@ -37,7 +36,7 @@ class DQN_Agent:
         self.keyboard = Controller()
         
         # define hyperparameter
-        self.criterion = criterion
+        self.criterion = torch.nn.MSELoss()
         self.optimizer = optimizer
         self.discount_factor = discount_factor
         self.epsilon_decay = epsilon_decay
@@ -52,7 +51,6 @@ class DQN_Agent:
         # define the dqn
         self.policy_net = policy_net
         self.target_net = target_net
-        self.target_net.eval()
         self.experience_replay = ReplayMemory(self.capacity)
         self.expert_replay = ReplayMemory()
         self.lstm = lstm
@@ -64,6 +62,9 @@ class DQN_Agent:
         self.steps = []
         self.epsilon_update = 0
         self.episode = 0
+
+        # keep track of pretraining data
+        self.loss_pretrain = []
 
         if self.behavior_cloning:
             self._get_expert_demo()
@@ -81,14 +82,13 @@ class DQN_Agent:
         else:
             sample = random.random()
             epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-1. * self.epsilon_update/self.epsilon_decay)
-            self.epsilon_update += 1
             if sample < epsilon:
                 return torch.tensor(self.action_space.sample(), dtype=torch.long, device=device).unsqueeze(0)
             else:
                 return action
     
     def _get_expert_demo(self):
-        folder_path = "./exper_demo"
+        folder_path = "./expert_demo"
         for file_name in os.listdir(folder_path):
             if file_name.endswith(".pth"):
                 file_path = os.path.join(folder_path, file_name)
@@ -96,11 +96,6 @@ class DQN_Agent:
                 self._update_expert_replay(replay)
 
     def _update_expert_replay(self, replay):
-        states = []
-        next_states = []
-        rewards = []
-        done = []
-
         frames = replay["frame"]
         actions = replay["action"]
         hit_types = replay["hit_type"]
@@ -121,68 +116,95 @@ class DQN_Agent:
             state.append(note_vector)
             next_state.append(note_vector)
 
-            states.append(state)
-            next_states.append(next_state)
+            action = actions[i]
 
             hit_type = hit_types[i]
             reward, truncate, terminate = 0, False, False
             if hit_type is not None:
                 reward, truncate, terminate = self.env._get_reward(hit_type)
-            done_temp = truncate or terminate
-            rewards.append(reward)
-            done.append(done_temp)
+            done = truncate or terminate
 
+            # store for next state
             if i + 1 < len(frames):
                 note_vector = frames[i+1] 
                 note_vector = note_vector[:self.max_notes]
                 note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
 
                 next_state.append(note_vector)
-                next_states.append(next_state)
             else:
                 note_vector = [[0,0,0]] * self.max_notes
                 next_state.append(note_vector)
-                next_states.append(next_state)
+    
+            # convert to tensor
+            _state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
+            _action = torch.tensor(action, dtype=torch.long, device=device).unsqueeze(0)
+            _reward = torch.tensor([reward], device=device)
+            _next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
+
+            self.expert_replay.push(_state, _action, _reward, _next_state, done)
+
+    def _update_expert_model(self, margin=0.8, expert_sample=1, pretrain=True):
+        td_loss, q_values, expert_state, expert_action = self._compute_td_loss(expert_data=True, sample_ratio=expert_sample)
+
+        if self.lstm:
+            expert_q_values, _ = self.target_net(expert_state)
+        else:
+            expert_q_values = self.target_net(expert_state)
+
+        margin_values = torch.full_like(q_values, margin, device=device, dtype=torch.float32)
+
+        batch_indices = torch.arange(q_values.shape[0], device=device).unsqueeze(1)
+        action_indices = torch.arange(expert_action.shape[1], device=device)
+
+        # Create a mask and apply it without in-place operation
+        expert_action_mask = torch.zeros_like(q_values, device=device, dtype=torch.bool)
+        expert_action_mask[batch_indices, action_indices, expert_action] = True
         
-        self.expert_replay.push(states, actions, rewards, next_states, done)
+        margin_values = margin_values.masked_fill(expert_action_mask, 0)
 
+        # Q(s,a) + I(a_expect, a) - Q(s, a_expert)
+        margin_loss = torch.max((q_values + margin_values), dim=2)[0] - expert_q_values.gather(2, expert_action.unsqueeze(2)).squeeze(2)
 
-    def _update_model(self):
+        # include td loss and margin loss 
+        loss = td_loss + margin_loss
+
+        if pretrain:
+            # backpropagation
+            self.optimizer.zero_grad()
+            loss.backward()
+
+            # gradient clipping
+            if not self.lstm:
+                torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+
+            self.optimizer.step()
+
+            # soft update for target network
+            self._soft_update()
+
+        return loss
+        
+
+    def _update_model(self, margin=0.1):
+        self_sample = 1
         if len(self.experience_replay) < self.batch_size:
             return
         
-        transitions= self.experience_replay.sample(self.batch_size)
-        state_batch, action_batch, reward_batch, next_state_batch, done_batch = zip(*transitions)
-        state_batch = torch.cat(state_batch)
-        action_batch = torch.cat(action_batch)
-        reward_batch = torch.cat(reward_batch)
+        # weights loss and sample % for expert and self-generated data using epsilon decay
+        if self.behavior_cloning:
+            expert_weight = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-1. * self.epsilon_update/self.epsilon_decay)
+            self_weight = 1 - expert_weight
 
-        # only get the next state where it isn't terminate or truncate
-        non_final_mask = torch.tensor([not done for done in done_batch], dtype=torch.bool, device=device)
-        non_final_next_states = torch.cat([s for s, done in zip(next_state_batch, done_batch) if not done])
+            expert_sample = 0.2 + (0.8-0.2) * np.exp(-1 * self.epsilon_update/self.epsilon_decay)
+            self.sample = 1 - expert_sample
 
-        # compute q values
-        if self.lstm:
-            q_values, _ = self.policy_net(state_batch)
-            q_values = q_values.gather(2, action_batch.unsqueeze(2)).squeeze(2)
+        td_loss, _, _, _ = self._compute_td_loss(pretrain=False, sample_ratio=self_sample)
+
+        if self.behavior_cloning:
+            expert_loss = self._update_expert_model(margin, expert_sample, pretrain=False)
+            loss = self_weight*td_loss + expert_weight*expert_loss
         else:
-            q_values = self.policy_net(state_batch).gather(2, action_batch.unsqueeze(2)).squeeze(2)
-
-        # compute expect q values
-        next_state_values = torch.zeros_like(q_values, device=device)
-        with torch.no_grad():
-            if self.lstm:
-                next_q_values, _ = self.target_net(non_final_next_states)
-                next_q_values = next_q_values.max(dim=2).values
-            else:
-                next_q_values = self.target_net(non_final_next_states).max(dim=2).values
-                
-            next_state_values[non_final_mask] = next_q_values
-
-        expected_q_values = (next_state_values * self.discount_factor) + reward_batch.unsqueeze(1)
-
-        # compute lose
-        loss = self.criterion(q_values, expected_q_values)
+            loss = td_loss
 
         # backpropagation
         self.optimizer.zero_grad()
@@ -197,55 +219,121 @@ class DQN_Agent:
         # soft update for target network
         self._soft_update()
 
-        return loss.item()
+        return loss
     
     def _smooth_data(self, data):
         window_size = int(len(data)*0.05)
         window_size = max(1, window_size)
         return pd.Series(data).rolling(window=window_size).mean()
     
-    def plot(self):
-        average_rewards = self._smooth_data(self.rewards)
-        plt.plot(average_rewards)
-        plt.xlabel('Episode')
-        plt.ylabel('Total Reward')
-        plt.title('Total Rewards Over Episodes')
-        plt.show()
+    def _compute_td_loss(self, expert_data=False, sample_ratio=1):
+        if expert_data:
+            transitions= self.expert_replay.sample(int(sample_ratio*self.batch_size))
+        else:
+            transitions = self.experience_replay.sample(int(sample_ratio*self.batch_size))
 
-        average_loss = self._smooth_data(self.loss)
-        plt.plot(average_loss)
-        plt.xlabel('Episode')
-        plt.ylabel('Loss Value')
-        plt.title('Loss Values Over Episodes')
-        plt.show()
+        state_batch, action_batch, reward_batch, next_state_batch, done_batch = zip(*transitions)
+        state_batch = torch.cat(state_batch)
+        action_batch = torch.cat(action_batch)
+        reward_batch = torch.cat(reward_batch)
+        next_state_batch = torch.cat(next_state_batch)
+        done_batch= torch.tensor([done for done in done_batch], dtype=torch.long, device=device)
+       
+        # compute q values
+        if self.lstm:
+            q_values, _ = self.policy_net(state_batch)
+            
+        else:
+            q_values = self.policy_net(state_batch)
 
-        average_steps = self._smooth_data(self.steps)
-        plt.plot(average_steps)
-        plt.xlabel('Episode')
-        plt.ylabel('Steps')
-        plt.title('Steps Over Episodes')
-        plt.show()
+        q_values_optimal = q_values.gather(2, action_batch.unsqueeze(2)).squeeze(2)
+
+        # compute expect q values
+        with torch.no_grad():
+            if self.lstm:
+                next_q_values, _ = self.target_net(next_state_batch)
+                
+            else:
+                next_q_values = self.target_net(next_state_batch)
+
+            next_q_values_optimal = next_q_values.max(dim=2).values
+                
+        expected_q_values = (1-done_batch.unsqueeze(1)) * (next_q_values_optimal * self.discount_factor) + reward_batch.unsqueeze(1)
+
+        # compute td loss using mse
+        loss = self.criterion(q_values_optimal, expected_q_values)
+
+        return loss, q_values, state_batch, action_batch
     
-    def saveModel(self, name):
+    def plot(self, pretrain=False):
+        if not pretrain:
+            average_rewards = self._smooth_data(self.rewards)
+            plt.plot(average_rewards)
+            plt.xlabel('Episode')
+            plt.ylabel('Total Reward')
+            plt.title('Total Rewards Over Episodes')
+            plt.show()
+
+            average_loss = self._smooth_data(self.loss)
+            plt.plot(average_loss)
+            plt.xlabel('Episode')
+            plt.ylabel('Loss Value')
+            plt.title('Loss Values Over Episodes')
+            plt.show()
+
+            average_steps = self._smooth_data(self.steps)
+            plt.plot(average_steps)
+            plt.xlabel('Episode')
+            plt.ylabel('Steps')
+            plt.title('Steps Over Episodes')
+            plt.show()
+
+        else:
+            average_loss = self._smooth_data(self.loss_pretrain)
+            plt.plot(average_loss)
+            plt.xlabel('Episode')
+            plt.ylabel('Loss Value')
+            plt.title('Loss Values Over Episodes')
+            plt.show()
+
+    
+    def saveModel(self, name, pretrain=False):
         # ensure the folder exist
         os.makedirs('./model_results', exist_ok=True)
-        torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network.pth")
+        if pretrain:
+            torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network_pretrain.pth")
+            torch.save({
+                'loss_pretrain': self.loss_pretrain
+                }, f"./model_results/{name}_metadata_pretrain.pth"
+            )
 
-        torch.save({
-            'loss': self.loss,
-            'reward': self.rewards,
-            'step' : self.steps
-            }, f"./model_results/{name}_metadata.pth"
-        )
+        else:
+            torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network.pth")
+            torch.save({
+                'loss': self.loss,
+                'reward': self.rewards,
+                'step' : self.steps
+                }, f"./model_results/{name}_metadata.pth"
+            )
+
         print("Model Saved")
 
-    def loadModel(self, name):
-        self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network.pth"))
-        metadata = torch.load(f"./model_results/{name}_metadata.pth")
+    def loadModel(self, name, pretrain=False):
+        if pretrain:
+            self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network_pretrain.pth"))
+            self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+            metadata = torch.load(f"./model_results/{name}_metadata_pretrain.pth")
+            self.loss_pretrain = metadata["loss_pretrain"]
+        else:
+            self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network.pth"))
+            self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+            metadata = torch.load(f"./model_results/{name}_metadata.pth")
 
-        self.loss = metadata['loss']
-        self.rewards = metadata['reward']
-        self.steps = metadata['step']
+            self.loss = metadata['loss']
+            self.rewards = metadata['reward']
+            self.steps = metadata['step']
 
         print("Model Loaded")
 
@@ -258,7 +346,17 @@ class DQN_Agent:
                                     self.target_update_rate)
         self.target_net.load_state_dict(target_state_dict)
 
-    def train(self, total_episode = 500):
+    def pretrain(self, margin=0.8, total_episode=1000):
+        self.policy_net.train()
+        for episode in range(1, total_episode+1):
+            loss = self._update_expert_model(margin)
+
+            self.loss_pretrain.append(loss.item())
+
+            if episode%10 == 0:
+                print(f"Episod {episode}, pre-training loss: {loss.item()}")
+
+    def train(self, margin=0.1, total_episode = 500):
         self.policy_net.train()
         for episode in range(1, total_episode+1):
             total_loss = 0
@@ -285,7 +383,7 @@ class DQN_Agent:
 
                     # push to experience replay where state is not all zeros
                     if not torch.all(state==0):
-                        if reward.item() != 0 or random.random() < 0.5: # avoid memory to overflow with unimportant state
+                        if reward.item() != 0 or random.random() < 0.1: # avoid memory to overflow with unimportant state
                             self.experience_replay.push(state, action, reward, next_state, done)
                             update_count += 1
 
@@ -299,13 +397,14 @@ class DQN_Agent:
             # update after the sond ends
             count = 0
             for _ in range(int(update_count/2)):
-                loss = self._update_model()
+                loss = self._update_model(margin)
                 if loss is not None:
-                    total_loss += loss
+                    total_loss += loss.item()
                     count += 1
 
             avg_loss = total_loss/count if count > 0 else 0
             self.episode += 1
+            self.epsilon_update += 1
 
             if self.episode%10 == 0:
                 print(f'Epsiode: {self.episode}: Total Reward: {total_reward}, Loss: {avg_loss}')

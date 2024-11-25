@@ -164,7 +164,7 @@ class SocketListener():
     else:
       print('Socket listener is not running.')
   
-  def fetch_data(self, action_fuc, timeout):
+  def fetch_data(self, action_func, timeout):
     """
       Fetches data specifically after performing an action.
       action_func: function that triggers the keyboard action
@@ -174,7 +174,7 @@ class SocketListener():
     self.has_new_data.clear()
 
     # perform the action function
-    action_fuc()
+    action_func()
 
     # wait for new data within timeout
     if self.has_new_data.wait(timeout=timeout):
