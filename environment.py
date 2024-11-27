@@ -3,7 +3,7 @@ from gymnasium import spaces
 import numpy as np
 from pynput.keyboard import Controller, Key
 from concurrent.futures import ThreadPoolExecutor
-from helper import SocketListener
+from helper import SocketListener, capture, detect
 import torch
 import mss
 import pathlib
@@ -144,10 +144,7 @@ class OsuEnvironment(gym.Env):
 
         if data is not None:
             reward, truncate, terminate = self._get_reward(data)
-        else:
-            if not self.key_pressed:
-                reward += 0.1 # reward for not pressing when no note is near
-
+            
         # ensure that each step represents proper FS frame
         time_end = time.time() - time_start
 
@@ -270,52 +267,18 @@ class OsuEnvironment(gym.Env):
         self.monitor = mss.mss().monitors[1]
         t, l, w, h = self.monitor['top'], self.monitor['left'], self.monitor['width'], self.monitor['height']
         self.region = {'left': l+int(w * 0.338), 'top': t, 'width': w-int(w * 0.673), 'height': h} 
-    
-    def _detect(self, img, model):
-        lanes = {
-            0 : (10, 180),
-            1 : (150, 320),
-            2 : (300, 470),
-            3 : (440, 610)
-        }
-        ret = []  
-        res = model(img)
-  
-        for box in res.xyxy[0]:
-            # Confidence level is less than 50%
-            if box[4] < 0.50:
-                continue
-    
-            x_center = int((box[0] + box[2]) / 2)
-            y_center = int((box[1] + box[3]) / 2)
-            class_id = int(box[5]) # classes are 0: end_hold, 1: note, 2: start_hold
-        
-            # Identify the lane of the note based on x_center
-            for lane, (start, end) in lanes.items():
-                if start <= x_center <= end:
-                    break
-        
-            ret.append([class_id, lane, y_center])
-
-        if ret:
-            # only care about notes that are near the hit window
-            ret = sorted(ret, key=lambda note: (-note[2], note[1]))
-            ret = ret[:self.max_notes]
-
-        # add padding if it is less than max note
-        ret += [[0,0,0]] * (self.max_notes - len(ret))
-        return ret 
-
-    def _capture(self,region):
-        with mss.mss() as sct:
-            return sct.grab(region)
         
     def _notes_detection(self):
-        vision_thread = self.executor.submit(self._capture, self.region)
+        vision_thread = self.executor.submit(capture, self.region)
         image = vision_thread.result()
 
-        vision_thread = self.executor.submit(self._detect, np.array(image), self.model)
-        self.observation.append(vision_thread.result())
+        vision_thread = self.executor.submit(detect, np.array(image), self.model, True)
+        note_vector = vision_thread.result()
+
+        note_vector = note_vector[:self.max_notes]
+        note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+
+        self.observation.append(note_vector)
 
     def _perform_action(self, actions):
         if isinstance(actions, torch.Tensor):

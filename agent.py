@@ -111,7 +111,14 @@ class DQN_Agent:
         for i in range(len(frames)):
             note_vector = frames[i] 
             note_vector = note_vector[:self.max_notes]
+            if note_vector != []:
+                note_vector = np.array(note_vector, dtype=np.float32)
+                note_vector[:, :2] += 1
+                note_vector = note_vector.tolist()
+                
             note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+            note_vector = np.array(note_vector, dtype=np.float32)
+            note_vector[:, 2] /= 100.0
 
             state.append(note_vector)
             next_state.append(note_vector)
@@ -128,7 +135,14 @@ class DQN_Agent:
             if i + 1 < len(frames):
                 note_vector = frames[i+1] 
                 note_vector = note_vector[:self.max_notes]
+                if note_vector != []:
+                    note_vector = np.array(note_vector, dtype=np.float32)
+                    note_vector[:, :2] += 1
+                    note_vector = note_vector.tolist()
+
                 note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
+                note_vector = np.array(note_vector, dtype=np.float32)
+                note_vector[:, 2] /= 100.0
 
                 next_state.append(note_vector)
             else:
@@ -141,32 +155,25 @@ class DQN_Agent:
             _reward = torch.tensor([reward], device=device)
             _next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
 
-            self.expert_replay.push(_state, _action, _reward, _next_state, done)
+            if not torch.all(_state==0) or random.random() < 0.5:
+                if reward != 0 or random.random() < 0.1:
+                    self.expert_replay.push(_state, _action, _reward, _next_state, done)
 
     def _update_expert_model(self, margin=0.8, expert_sample=1, pretrain=True):
-        td_loss, q_values, expert_state, expert_action = self._compute_td_loss(expert_data=True, sample_ratio=expert_sample)
-
-        if self.lstm:
-            expert_q_values, _ = self.target_net(expert_state)
-        else:
-            expert_q_values = self.target_net(expert_state)
+        td_loss, q_values, expert_action = self._compute_td_loss(expert_data=True, sample_ratio=expert_sample)
 
         margin_values = torch.full_like(q_values, margin, device=device, dtype=torch.float32)
 
         batch_indices = torch.arange(q_values.shape[0], device=device).unsqueeze(1)
         action_indices = torch.arange(expert_action.shape[1], device=device)
 
-        # Create a mask and apply it without in-place operation
-        expert_action_mask = torch.zeros_like(q_values, device=device, dtype=torch.bool)
-        expert_action_mask[batch_indices, action_indices, expert_action] = True
-        
-        margin_values = margin_values.masked_fill(expert_action_mask, 0)
+        margin_values[batch_indices, action_indices, expert_action] = 0
 
         # Q(s,a) + I(a_expect, a) - Q(s, a_expert)
-        margin_loss = torch.max((q_values + margin_values), dim=2)[0] - expert_q_values.gather(2, expert_action.unsqueeze(2)).squeeze(2)
+        margin_loss = torch.max((q_values + margin_values), dim=2)[0] - q_values.gather(2, expert_action.unsqueeze(2)).squeeze(2)
 
         # include td loss and margin loss 
-        loss = td_loss + margin_loss
+        loss = td_loss + margin_loss.mean()
 
         if pretrain:
             # backpropagation
@@ -176,6 +183,8 @@ class DQN_Agent:
             # gradient clipping
             if not self.lstm:
                 torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+            else:
+                torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=5)
 
             self.optimizer.step()
 
@@ -198,7 +207,7 @@ class DQN_Agent:
             expert_sample = 0.2 + (0.8-0.2) * np.exp(-1 * self.epsilon_update/self.epsilon_decay)
             self.sample = 1 - expert_sample
 
-        td_loss, _, _, _ = self._compute_td_loss(pretrain=False, sample_ratio=self_sample)
+        td_loss, _, _ = self._compute_td_loss(expert_data=False, sample_ratio=self_sample)
 
         if self.behavior_cloning:
             expert_loss = self._update_expert_model(margin, expert_sample, pretrain=False)
@@ -213,6 +222,8 @@ class DQN_Agent:
         # gradient clipping
         if not self.lstm:
             torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+        else:
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=5)
 
         self.optimizer.step()
 
@@ -263,7 +274,7 @@ class DQN_Agent:
         # compute td loss using mse
         loss = self.criterion(q_values_optimal, expected_q_values)
 
-        return loss, q_values, state_batch, action_batch
+        return loss, q_values, action_batch
     
     def plot(self, pretrain=False):
         if not pretrain:
