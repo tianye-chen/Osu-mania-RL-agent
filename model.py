@@ -90,7 +90,7 @@ class LSTM_DQN(nn.Module):
             
             return q_values, hidden_state
         
-class LSTM_PPO(nn.Module):
+class LSTM_Actor(nn.Module):
     def __init__(self, input_size, action_space, hidden_size=128, num_layers=1, dropout=0):
         super(LSTM_DQN, self).__init__()
         self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, dropout=dropout, batch_first=True)
@@ -104,18 +104,34 @@ class LSTM_PPO(nn.Module):
             nn.Linear(hidden_size, dim) for dim in action_space
         ])
 
-        self.critic = nn.Linear(128, 1)
 
     def forward(self, x, hidden_state=None):
         lstm_out, hidden_state = self.lstm(x, hidden_state)
         lstm_out = lstm_out[:, -1, :]
         logits = [actor(lstm_out).unsqueeze(1) for actor in self.actors]
         logits = torch.cat(logits, dim=1)
+
+        return logits, hidden_state
+    
+class LSTM_Critic(nn.Module):
+    def __init__(self, input_size, hidden_size=128, num_layers=1, dropout=0):
+        super(LSTM_Critic, self).__init__()
+        self.lstm = nn.LSTM(input_size=input_size, hidden_size=hidden_size, num_layers=num_layers, dropout=dropout, batch_first=True)
+
+        self.linear_layer = nn.Sequential(
+            nn.Linear(hidden_size, 128),
+            nn.ReLU(inplace=True)
+        )
+
+        self.critic = nn.Linear(128, 1)
+
+    def forward(self, x, hidden_state=None):
+        lstm_out, hidden_state = self.lstm(x, hidden_state)
+        lstm_out = lstm_out[:, -1, :]
         value = self.critic(lstm_out)
 
-        return logits, value, hidden_state
-
-        
+        return value
+      
 class ReplayMemory:
     def __init__(self, capacity=None, ppo = False):
         self.memory = deque(maxlen=capacity)
