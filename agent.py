@@ -23,7 +23,6 @@ class DQN_Agent:
                  target_update_rate=0.005, 
                  batch_size=128, 
                  capacity=10000,
-                 noisy_dqn=False,
                  lstm = False, 
                  behavior_cloning = False):
         
@@ -45,7 +44,6 @@ class DQN_Agent:
         self.target_update_rate = target_update_rate
         self.batch_size = batch_size
         self.capacity = capacity
-        self.noisy_dqn = noisy_dqn
         self.behavior_cloning = behavior_cloning
 
         # define the dqn
@@ -77,15 +75,12 @@ class DQN_Agent:
             else:
                 action = self.policy_net(state).argmax(dim=2)
 
-        if self.noisy_dqn:
-                return action
+        sample = random.random()
+        epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-1. * self.epsilon_update/self.epsilon_decay)
+        if sample < epsilon:
+            return torch.tensor(self.action_space.sample(), dtype=torch.long, device=device).unsqueeze(0)
         else:
-            sample = random.random()
-            epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-1. * self.epsilon_update/self.epsilon_decay)
-            if sample < epsilon:
-                return torch.tensor(self.action_space.sample(), dtype=torch.long, device=device).unsqueeze(0)
-            else:
-                return action
+            return action
     
     def _get_expert_demo(self):
         folder_path = "./expert_demo"
@@ -172,6 +167,8 @@ class DQN_Agent:
         # Q(s,a) + I(a_expect, a) - Q(s, a_expert)
         margin_loss = torch.max((q_values + margin_values), dim=2)[0] - q_values.gather(2, expert_action.unsqueeze(2)).squeeze(2)
 
+        criterion = torch.nn.CrossEntropyLoss()
+
         # include td loss and margin loss 
         loss = td_loss + margin_loss.mean()
 
@@ -253,7 +250,6 @@ class DQN_Agent:
         # compute q values
         if self.lstm:
             q_values, _ = self.policy_net(state_batch)
-            
         else:
             q_values = self.policy_net(state_batch)
 
