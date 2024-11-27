@@ -67,6 +67,207 @@ class DQN_Agent:
         if self.behavior_cloning:
             self._get_expert_demo()
 
+    def pretrain(self, margin=0.8, total_episode=1000):
+        self.policy_net.train()
+        for episode in range(1, total_episode+1):
+            loss = self._update_expert_model(margin)
+
+            self.loss_pretrain.append(loss.item())
+
+            if episode%10 == 0:
+                print(f"Episod {episode}, pre-training loss: {loss.item()}")
+
+    def train(self, margin=0.1, total_episode = 500):
+        self.policy_net.train()
+        for episode in range(1, total_episode+1):
+            total_loss = 0
+            total_reward = 0
+            total_step = 0
+            update_count = 0
+            done = False
+            self.hidden = None
+            state = self.env.reset()
+            self.env.pick_random_song()
+            # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
+            while not done and self.env.checking_connection():
+                if self.env.song_begin():
+                    action = self._action_policy(state)
+                    next_state, reward, terminate, truncate = self.env.step(action)
+                    
+                    # convert to proper tensor shape
+                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
+                    total_reward += reward
+                    reward = torch.tensor([reward], device=device)
+                    
+                    done = terminate or truncate
+
+                    # push to experience replay where state is not all zeros
+                    if not torch.all(state==0):
+                        if reward.item() != 0 or random.random() < 0.1: # avoid memory to overflow with unimportant state
+                            self.experience_replay.push(state, action, reward, next_state, done)
+                            update_count += 1
+
+                    state = next_state
+                    total_step += 1
+
+                # break when socket connection disconnect
+                if self.env.lost_connection():
+                    break
+                
+            # update after the sond ends
+            count = 0
+            for _ in range(int(update_count/2)):
+                loss = self._update_model(margin)
+                if loss is not None:
+                    total_loss += loss.item()
+                    count += 1
+
+            avg_loss = total_loss/count if count > 0 else 0
+            self.episode += 1
+            self.epsilon_update += 1
+
+            if self.episode%10 == 0:
+                print(f'Epsiode: {self.episode}: Total Reward: {total_reward}, Loss: {avg_loss}')
+
+            self.loss.append(avg_loss)
+            self.rewards.append(total_reward)
+            self.steps.append(total_step)
+
+            self.env.return_to_song_selection_after_song()
+
+            if episode == total_episode:
+                self.keyboard.type("Finish training")
+
+    def eval(self, total_episode):
+        self.policy_net.eval()
+        total_rewards = []
+        songs = []
+        total_steps = []
+        self.hidden = None
+        for episode in range(1, total_episode+1):
+            done = False
+            episode_reward = 0
+            episode_steps = 0
+            state = self.env.reset()
+            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
+            self.env.pick_random_song()
+            while not done and self.env.checking_connection():
+                with torch.no_grad():
+                    if self.env.song_begin():
+                            if self.lstm:
+                                q_values, self.hidden = self.policy_net(state, self.hidden)
+                                action = q_values.argmax(dim=2)
+                            else:
+                                action = self.policy_net(state).argmax(dim=2)
+
+                            next_state, reward, terminate, truncate = self.env.step(action, train=False)
+                            
+                            # convert to proper tensor shape
+                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
+                            done = terminate or truncate
+                            state = next_state
+                            episode_reward += reward
+                            episode_steps += 1
+
+                    # break when socket connection disconnect or timeout 
+                    if self.env.lost_connection():
+                        break
+            
+            total_rewards.append(episode_reward)
+            total_steps.append(episode_steps)
+            songs.append(self.env.getSong())
+
+            self.env.return_to_song_selection_after_song()
+
+            if episode == total_episode:
+                self.keyboard.type("Finish evaluating")
+
+        plt.plot(songs, total_rewards)
+        plt.xlabel('Song Name')
+        plt.ylabel('Reward')
+        plt.title('Rewards Over Each Song')
+        plt.xticks(rotation=45, ha='right')
+        plt.show()
+
+        plt.plot(songs, total_steps)
+        plt.xlabel('Song Name')
+        plt.ylabel('Step')
+        plt.title('Steps Over Each Song')
+        plt.xticks(rotation=45, ha='right')
+        plt.show()
+
+    def plot(self, pretrain=False):
+        if not pretrain:
+            average_rewards = self._smooth_data(self.rewards)
+            plt.plot(average_rewards)
+            plt.xlabel('Episode')
+            plt.ylabel('Total Reward')
+            plt.title('Total Rewards Over Episodes')
+            plt.show()
+
+            average_loss = self._smooth_data(self.loss)
+            plt.plot(average_loss)
+            plt.xlabel('Episode')
+            plt.ylabel('Loss Value')
+            plt.title('Loss Values Over Episodes')
+            plt.show()
+
+            average_steps = self._smooth_data(self.steps)
+            plt.plot(average_steps)
+            plt.xlabel('Episode')
+            plt.ylabel('Steps')
+            plt.title('Steps Over Episodes')
+            plt.show()
+
+        else:
+            average_loss = self._smooth_data(self.loss_pretrain)
+            plt.plot(average_loss)
+            plt.xlabel('Episode')
+            plt.ylabel('Loss Value')
+            plt.title('Loss Values Over Episodes')
+            plt.show()
+
+    def saveModel(self, name, pretrain=False):
+        # ensure the folder exist
+        os.makedirs('./model_results', exist_ok=True)
+        if pretrain:
+            torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network_pretrain.pth")
+            torch.save({
+                'loss_pretrain': self.loss_pretrain
+                }, f"./model_results/{name}_metadata_pretrain.pth"
+            )
+
+        else:
+            torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network.pth")
+            torch.save({
+                'loss': self.loss,
+                'reward': self.rewards,
+                'step' : self.steps
+                }, f"./model_results/{name}_metadata.pth"
+            )
+
+        print("Model Saved")
+
+    def loadModel(self, name, pretrain=False):
+        if pretrain:
+            self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network_pretrain.pth"))
+            self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+            metadata = torch.load(f"./model_results/{name}_metadata_pretrain.pth")
+            self.loss_pretrain = metadata["loss_pretrain"]
+        else:
+            self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network.pth"))
+            self.target_net.load_state_dict(self.policy_net.state_dict())
+        
+            metadata = torch.load(f"./model_results/{name}_metadata.pth")
+
+            self.loss = metadata['loss']
+            self.rewards = metadata['reward']
+            self.steps = metadata['step']
+
+        print("Model Loaded")
+
     def _action_policy(self, state):
         with torch.no_grad():
             if self.lstm:
@@ -188,8 +389,7 @@ class DQN_Agent:
             # soft update for target network
             self._soft_update()
 
-        return loss
-        
+        return loss 
 
     def _update_model(self, margin=0.1):
         self_sample = 1
@@ -272,78 +472,6 @@ class DQN_Agent:
 
         return loss, q_values, action_batch
     
-    def plot(self, pretrain=False):
-        if not pretrain:
-            average_rewards = self._smooth_data(self.rewards)
-            plt.plot(average_rewards)
-            plt.xlabel('Episode')
-            plt.ylabel('Total Reward')
-            plt.title('Total Rewards Over Episodes')
-            plt.show()
-
-            average_loss = self._smooth_data(self.loss)
-            plt.plot(average_loss)
-            plt.xlabel('Episode')
-            plt.ylabel('Loss Value')
-            plt.title('Loss Values Over Episodes')
-            plt.show()
-
-            average_steps = self._smooth_data(self.steps)
-            plt.plot(average_steps)
-            plt.xlabel('Episode')
-            plt.ylabel('Steps')
-            plt.title('Steps Over Episodes')
-            plt.show()
-
-        else:
-            average_loss = self._smooth_data(self.loss_pretrain)
-            plt.plot(average_loss)
-            plt.xlabel('Episode')
-            plt.ylabel('Loss Value')
-            plt.title('Loss Values Over Episodes')
-            plt.show()
-
-    
-    def saveModel(self, name, pretrain=False):
-        # ensure the folder exist
-        os.makedirs('./model_results', exist_ok=True)
-        if pretrain:
-            torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network_pretrain.pth")
-            torch.save({
-                'loss_pretrain': self.loss_pretrain
-                }, f"./model_results/{name}_metadata_pretrain.pth"
-            )
-
-        else:
-            torch.save(self.policy_net.state_dict(), f"./model_results/{name}_network.pth")
-            torch.save({
-                'loss': self.loss,
-                'reward': self.rewards,
-                'step' : self.steps
-                }, f"./model_results/{name}_metadata.pth"
-            )
-
-        print("Model Saved")
-
-    def loadModel(self, name, pretrain=False):
-        if pretrain:
-            self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network_pretrain.pth"))
-            self.target_net.load_state_dict(self.policy_net.state_dict())
-        
-            metadata = torch.load(f"./model_results/{name}_metadata_pretrain.pth")
-            self.loss_pretrain = metadata["loss_pretrain"]
-        else:
-            self.policy_net.load_state_dict(torch.load(f"./model_results/{name}_network.pth"))
-            self.target_net.load_state_dict(self.policy_net.state_dict())
-        
-            metadata = torch.load(f"./model_results/{name}_metadata.pth")
-
-            self.loss = metadata['loss']
-            self.rewards = metadata['reward']
-            self.steps = metadata['step']
-
-        print("Model Loaded")
-
     def _soft_update(self):
          # soft update of the target's weights
         target_state_dict = self.target_net.state_dict()
@@ -352,137 +480,6 @@ class DQN_Agent:
             target_state_dict[key] = policy_state_dict[key] * self.target_update_rate + target_state_dict[key] * (1-
                                     self.target_update_rate)
         self.target_net.load_state_dict(target_state_dict)
-
-    def pretrain(self, margin=0.8, total_episode=1000):
-        self.policy_net.train()
-        for episode in range(1, total_episode+1):
-            loss = self._update_expert_model(margin)
-
-            self.loss_pretrain.append(loss.item())
-
-            if episode%10 == 0:
-                print(f"Episod {episode}, pre-training loss: {loss.item()}")
-
-    def train(self, margin=0.1, total_episode = 500):
-        self.policy_net.train()
-        for episode in range(1, total_episode+1):
-            total_loss = 0
-            total_reward = 0
-            total_step = 0
-            update_count = 0
-            done = False
-            self.hidden = None
-            state = self.env.reset()
-            self.env.pick_random_song()
-            # shape[stack, max notes, 3] to [1, stack, max notes, 3] to [1, stack, max notes * 3]
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
-            while not done and self.env.checking_connection():
-                if self.env.song_begin():
-                    action = self._action_policy(state)
-                    next_state, reward, terminate, truncate = self.env.step(action)
-                    
-                    # convert to proper tensor shape
-                    next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
-                    total_reward += reward
-                    reward = torch.tensor([reward], device=device)
-                    
-                    done = terminate or truncate
-
-                    # push to experience replay where state is not all zeros
-                    if not torch.all(state==0):
-                        if reward.item() != 0 or random.random() < 0.1: # avoid memory to overflow with unimportant state
-                            self.experience_replay.push(state, action, reward, next_state, done)
-                            update_count += 1
-
-                    state = next_state
-                    total_step += 1
-
-                # break when socket connection disconnect
-                if self.env.lost_connection():
-                    break
-                
-            # update after the sond ends
-            count = 0
-            for _ in range(int(update_count/2)):
-                loss = self._update_model(margin)
-                if loss is not None:
-                    total_loss += loss.item()
-                    count += 1
-
-            avg_loss = total_loss/count if count > 0 else 0
-            self.episode += 1
-            self.epsilon_update += 1
-
-            if self.episode%10 == 0:
-                print(f'Epsiode: {self.episode}: Total Reward: {total_reward}, Loss: {avg_loss}')
-
-            self.loss.append(avg_loss)
-            self.rewards.append(total_reward)
-            self.steps.append(total_step)
-
-            self.env.return_to_song_selection_after_song()
-
-            if episode == total_episode:
-                self.keyboard.type("Finish training")
-
-
-    def eval(self, total_episode):
-        self.policy_net.eval()
-        total_rewards = []
-        songs = []
-        total_steps = []
-        self.hidden = None
-        for episode in range(1, total_episode+1):
-            done = False
-            episode_reward = 0
-            episode_steps = 0
-            state = self.env.reset()
-            state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
-            self.env.pick_random_song()
-            while not done and self.env.checking_connection():
-                with torch.no_grad():
-                    if self.env.song_begin():
-                            if self.lstm:
-                                q_values, self.hidden = self.policy_net(state, self.hidden)
-                                action = q_values.argmax(dim=2)
-                            else:
-                                action = self.policy_net(state).argmax(dim=2)
-
-                            next_state, reward, terminate, truncate = self.env.step(action, train=False)
-                            
-                            # convert to proper tensor shape
-                            next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
-                            done = terminate or truncate
-                            state = next_state
-                            episode_reward += reward
-                            episode_steps += 1
-
-                    # break when socket connection disconnect or timeout 
-                    if self.env.lost_connection():
-                        break
-            
-            total_rewards.append(episode_reward)
-            total_steps.append(episode_steps)
-            songs.append(self.env.getSong())
-
-            self.env.return_to_song_selection_after_song()
-
-            if episode == total_episode:
-                self.keyboard.type("Finish evaluating")
-
-        plt.plot(songs, total_rewards)
-        plt.xlabel('Song Name')
-        plt.ylabel('Reward')
-        plt.title('Rewards Over Each Song')
-        plt.xticks(rotation=45, ha='right')
-        plt.show()
-
-        plt.plot(songs, total_steps)
-        plt.xlabel('Song Name')
-        plt.ylabel('Step')
-        plt.title('Steps Over Each Song')
-        plt.xticks(rotation=45, ha='right')
-        plt.show()
 
 class PPO_Agent:
     def __init__(self, 
