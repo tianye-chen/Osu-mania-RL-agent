@@ -11,11 +11,12 @@ from collections import deque
 import time
 
 class OsuEnvironment(gym.Env):
-    def __init__(self, num_frame = 4, max_notes = 8):
+    def __init__(self, num_frame = 4, max_notes = 8, monitor_id = 1):
         # set frame per second
         self.frame_interval = 1 / 15
 
         # setup the neccessary resources for vision task
+        self.monitor_id = monitor_id
         self._vision_setup()
 
         # the keys corresponading to the 4 lane
@@ -265,7 +266,7 @@ class OsuEnvironment(gym.Env):
         pathlib.PosixPath = pathlib.WindowsPath # https://github.com/ultralytics/yolov5/issues/10240#issuecomment-1662573188
         self.model = torch.hub.load('ultralytics/yolov5', 'custom', path='./models/best.pt', force_reload=True)  
 
-        self.monitor = mss.mss().monitors[1]
+        self.monitor = mss.mss().monitors[self.monitor_id]
         t, l, w, h = self.monitor['top'], self.monitor['left'], self.monitor['width'], self.monitor['height']
         self.region = {'left': l+int(w * 0.338), 'top': t, 'width': w-int(w * 0.673), 'height': h} 
         

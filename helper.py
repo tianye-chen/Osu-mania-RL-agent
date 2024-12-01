@@ -71,6 +71,8 @@ class SocketListener():
     '''
     self.server = server
     self.port = port
+    self.traceback = False
+    self.conn = None
     self.sock = None
     self.song_end = None
     self.data_handler = None
@@ -93,12 +95,14 @@ class SocketListener():
     # truncate when connection didn't close after song duration
     self.song_duration = 1000000
 
-  def start(self, data_handler):
+  def start(self, data_handler=None, traceback=True):
     '''
     Starts the socket listener
     
     data_handler: a callback function that receives hit type data
     '''
+    self.traceback = traceback
+    self.stop_requested = False
     self.data_handler = data_handler
     threading.Thread(target=self._listen, daemon=True).start()
     
@@ -116,16 +120,17 @@ class SocketListener():
           self._stop()
           break
         
-        conn, addr = self.sock.accept()
-        conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
-        #print(f'Connection from {addr}') disable print during tranining
-        self.has_connection = True
-        self._handle_connection(conn, addr)
+        if self.sock is not None:
+          self.conn, addr = self.sock.accept()
+          self.conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
+          #print(f'Connection from {addr}') disable print during tranining
+          self.has_connection = True
+          self._handle_connection(addr)
     except Exception as e:
       print(e)
       traceback.print_exc()
       
-  def _handle_connection(self, conn, addr):
+  def _handle_connection(self, addr):
     '''
     Internal function to handle incoming connections
     '''
@@ -142,10 +147,9 @@ class SocketListener():
           break
         
         try:
-          data = conn.recv(4)
-          process_data = int.from_bytes(data, byteorder='little')
-          
-          self.data_handler.add(process_data)
+          data = self.conn.recv(4)
+          processed_data = int.from_bytes(data, byteorder='little')
+          self.data_handler.add(processed_data)
 
           if 6 in self.data_handler.get():
             self.song_end = 6
@@ -166,19 +170,27 @@ class SocketListener():
     except ConnectionResetError:
       print(f'Connection reset by {addr}')
     except Exception as e:
-      print(e)
-      traceback.print_exc()
+      if self.traceback:
+        print(e)
+        traceback.print_exc()
     finally:
-      conn.close()
+      self.conn.close()
       self.has_connection = False
       self.is_first_connection = False
-      # print(f'Connection closed.')
+      print(f'Connection closed.')
       
   def stop(self):
     self.stop_requested = True
+    
+  def close_connection(self):
+    if self.conn:
+      self.conn.close()
+      self.has_connection = False
+      self.is_first_connection = False
       
   def _stop(self):
     if self.sock:
+      self.stop_requested = False
       self.sock.close()
       self.is_listening = False
       self.has_connection = False
@@ -246,7 +258,7 @@ def detect(img, model, normalize=False):
     
     x_center = int((box[0] + box[2]) / 2)
     y_center = int((box[1] + box[3]) / 2)
-    class_id = int(box[5])+1 # classes are 1: end_hold, 2: note, 3: start_hold
+    class_id = int(box[5]) + 1 # classes are 1: end_hold, 2: note, 3: start_hold
     
     # Identify the lane of the note based on x_center
     for lane, (start, end) in lanes.items():
