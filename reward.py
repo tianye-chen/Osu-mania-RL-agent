@@ -1,4 +1,4 @@
-class SimulatedReward:
+class Reward:
   def __init__(self, 
                begin_check=700,
                regular_note_threshold=[800, 930], 
@@ -26,6 +26,7 @@ class SimulatedReward:
     
     self.debug_good_actions = [0, 0, 0]
     self.debug_bad_actions = [0, 0, 0, 0, 0, 0]
+    self.debug_in_game_actions = [0, 0, 0, 0, 0, 0, 0, 0]
     
     self.rewards = {
       'good_regular_notes': 6,
@@ -41,6 +42,8 @@ class SimulatedReward:
     
   def get_simulated_reward(self, keys, notes, verbose=False):
     '''
+    Returns reward for given frame with respect to the notes and keys pressed
+    
     keys: list of keys pressed, e.g. [0, 1, 2, 3]
     notes: list of notes in the current frame in [[class_id, lane, y_center], ...], can be any length
     '''
@@ -61,14 +64,14 @@ class SimulatedReward:
     # hold_notes are handled by this function, keys_held should be handled separately
     for i in range(len(self.hold_notes)):
       if self.hold_notes[i] and not self.keys_held[i]:
-        self.debug_bad_actions[0] += 1
+        self.debug_bad_actions[1] += 1
         self.hold_notes[i] = False
         reward += self.rewards['broken_hold']
         
         if verbose:
           print(f'Hold note broken')
       elif not self.hold_notes[i] and self.keys_held[i]:
-        self.debug_bad_actions[1] += 1
+        self.debug_bad_actions[0] += 1
         reward += self.rewards['bad_hold']
       elif self.hold_notes[i] and self.keys_held[i]:
         self.debug_good_actions[2] += 1
@@ -101,7 +104,7 @@ class SimulatedReward:
         if class_id == 1:
           if self.end_hold_threshold[0] < y_center <= self.end_hold_threshold[1]:
             reward += self.rewards['good_end_holds']
-            self.debug_good_actions[2] += 1
+            self.debug_good_actions[1] += 1
           else:
             reward += self.rewards['bad_release']
             self.debug_bad_actions[3] += 1
@@ -170,31 +173,77 @@ class SimulatedReward:
     }
       
     
-  def get_debug(self):
+  def get_debug(self, render_mode=False):
     '''
     Returns a tuple of debug information
     
-    Should only be used as a reference, not accurate when compared to the actual game
+    Should only be used as a reference, not always accurate when compared to the actual game
     Resets debug counters being called
     
-    returns (good_actions, bad_actions), a tuple of dictionaries
+    returns in_game_actions or (good_actions, bad_actions), depending on render_mode
     '''
-    good_actions = {
-      'good_regular_notes': self.debug_good_actions[0],
-      'good_end_holds': self.debug_good_actions[1],
-      'good_hold': self.debug_good_actions[2]
-    }
-    
-    bad_actions = {
-      'bad_hold': self.debug_bad_actions[0],
-      'broken_hold': self.debug_bad_actions[1],
-      'bad_press': self.debug_bad_actions[2],
-      'bad_release': self.debug_bad_actions[3],
-      'missed_notes': self.debug_bad_actions[4],
-      'unnecessary_press': self.debug_bad_actions[5]
-    }
-    
-    self.debug_good_actions = [0, 0, 0]
-    self.debug_bad_actions = [0, 0, 0, 0, 0, 0]
-    
-    return good_actions, bad_actions
+    if render_mode:
+      in_game_actions = {
+        'miss': self.debug_in_game_actions[0],
+        'bad': self.debug_in_game_actions[1],
+        'meh': self.debug_in_game_actions[2],
+        'ok': self.debug_in_game_actions[3],
+        'great': self.debug_in_game_actions[4],
+        'perfect': self.debug_in_game_actions[5],
+        'song_cleared': self.debug_in_game_actions[6],
+        'song_failed': self.debug_in_game_actions[7]
+      }
+      
+      self.debug_in_game_actions = [0, 0, 0, 0, 0, 0, 0, 0]
+      
+      return in_game_actions
+    else:
+      good_actions = {
+        'good_regular_notes': self.debug_good_actions[0],
+        'good_end_holds': self.debug_good_actions[1],
+        'good_hold': self.debug_good_actions[2]
+      }
+      
+      bad_actions = {
+        'bad_hold': self.debug_bad_actions[0],
+        'broken_hold': self.debug_bad_actions[1],
+        'bad_press': self.debug_bad_actions[2],
+        'bad_release': self.debug_bad_actions[3],
+        'missed_notes': self.debug_bad_actions[4],
+        'unnecessary_press': self.debug_bad_actions[5]
+      }
+      
+      self.debug_good_actions = [0, 0, 0]
+      self.debug_bad_actions = [0, 0, 0, 0, 0, 0]
+      
+      return good_actions, bad_actions
+  
+  
+  def get_in_game_reward(self, hit_actions, notes):
+    '''
+    Returns rewards for hit action results provided by the game
+    '''
+    reward = 0
+    notes = [x for x in notes if x[2] > self.begin_check][:4]
+
+    for i in hit_actions:
+      self.debug_in_game_actions[i] += 1
+      match i:
+        case 0:
+          reward += -1
+        case 1:
+          reward += 1
+        case 2:
+          reward += 2
+        case 3:
+          reward += 4
+        case 5:
+          reward += 8
+        case 6:
+          reward += 0
+        case 7:
+          reward += 0
+          
+    return reward
+        
+        

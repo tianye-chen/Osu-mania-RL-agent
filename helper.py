@@ -71,6 +71,7 @@ class SocketListener():
     '''
     self.server = server
     self.port = port
+    self.conn = None
     self.sock = None
     self.latest_data = None
     self.song_end = None
@@ -120,16 +121,16 @@ class SocketListener():
           self._stop()
           break
         
-        conn, addr = self.sock.accept()
-        conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
+        self.conn, addr = self.sock.accept()
+        self.conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
         #print(f'Connection from {addr}') disable print during tranining
         self.has_connection = True
-        self._handle_connection(conn, addr)
+        self._handle_connection(addr)
     except Exception as e:
       print(e)
       traceback.print_exc()
       
-  def _handle_connection(self, conn, addr):
+  def _handle_connection(self, addr):
     '''
     Internal function to handle incoming connections
     '''
@@ -146,7 +147,7 @@ class SocketListener():
           break
         
         try:
-          data = conn.recv(4)
+          data = self.conn.recv(4)
           self.latest_data = int.from_bytes(data, byteorder='little')
 
           self.has_new_data.set() # signal that new data has arrived
@@ -172,13 +173,19 @@ class SocketListener():
       print(e)
       traceback.print_exc()
     finally:
-      conn.close()
+      self.conn.close()
       self.has_connection = False
       self.is_first_connection = False
       # print(f'Connection closed.')
       
   def stop(self):
     self.stop_requested = True
+    
+  def close_connection(self):
+    if self.conn:
+      self.conn.close()
+      self.has_connection = False
+      self.is_first_connection = False
       
   def _stop(self):
     if self.sock:
