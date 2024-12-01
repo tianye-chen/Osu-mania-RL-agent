@@ -212,18 +212,18 @@ class OsuEnvironment(gym.Env):
                     self.invalid = True
                 else:
                     return
-            case 1: # press
+            case 2: # press
                 if self.currently_hold[lane]:
                     self.invalid = True
                 else:
                     self.keyboard.press(key)
                     self.keyboard.release(key)
-            case 2: # hold
+            case 3: # hold
                 if self.currently_hold[lane]:
                     return
                 self.keyboard.press(key)
                 self.currently_hold[lane] = True
-            case 3: # release
+            case 1: # release
                 if self.currently_hold[lane]:
                     self.keyboard.release(key)
                     self.currently_hold[lane] = False
