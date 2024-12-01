@@ -3,7 +3,7 @@ from gymnasium import spaces
 import numpy as np
 from pynput.keyboard import Controller, Key
 from concurrent.futures import ThreadPoolExecutor
-from helper import SocketListener, capture, detect
+from helper import SocketListener,  DataQueue, capture, detect
 import torch
 import mss
 import pathlib
@@ -35,7 +35,6 @@ class OsuEnvironment(gym.Env):
         
         # keep track of which key is hold and if key is pressed
         self.currently_hold = [False] * len(self.keys)
-        self.key_pressed = False
 
         # check for invalid key press
         self.invalid = False
@@ -46,7 +45,8 @@ class OsuEnvironment(gym.Env):
 
         # socket setup
         self.listener = SocketListener()
-        self.listener.start()
+        self.hit_data = DataQueue()
+        self.listener.start(data_handler=self.hit_data)
 
         # remeber the song and mode it select
         self.song = ""
@@ -64,6 +64,7 @@ class OsuEnvironment(gym.Env):
             "burst the gravity (tv size)": [4, 1*60+29],
             "candy luv (short ver.)": [2, 2*60+12],
             "cyberia lyr 3": [10, 3*60+31],
+            "da xi (sped up ver.)": [2, 2*60+18],
             "empire": [4, 2*60+43],
             "enchanted love": [3, 2*60+8],
             "eutopia (tv size)": [4, 1*60+31],
@@ -112,10 +113,7 @@ class OsuEnvironment(gym.Env):
         self.currently_hold = [False] * len(self.keys)
         self.invalid = False
         self.observation.clear()
-        note_vectors = []
-        for _ in range(self.max_notes):
-            note_vectors.append([0,0,0])
-
+        note_vectors = [[0,0,0]] * self.max_notes
         for _ in range(self.num_frame):
             self.observation.append(note_vectors)
 
@@ -140,10 +138,14 @@ class OsuEnvironment(gym.Env):
         self._notes_detection()
 
         # take action based on the given actions simultaneously and fetech the hit type after action
-        data = self.listener.fetch_data(action_func=lambda: self._perform_action(actions), timeout=0.02)
+        self.hit_data.clear()
+        self._perform_action(actions)
+        data = self.hit_data.get()
+        info = {"idle": True} # it means that there is no hit type recieved
 
-        if data is not None:
+        if len(data) != 0:
             reward, truncate, terminate = self._get_reward(data)
+            info["idle"] = False
             
         # ensure that each step represents proper FS frame
         time_end = time.time() - time_start
@@ -151,7 +153,7 @@ class OsuEnvironment(gym.Env):
         if time_end < self.frame_interval and train:
             time.sleep(self.frame_interval-time_end)
 
-        return self.observation, reward, truncate, terminate
+        return self.observation, reward, truncate, terminate, info
 
     def lost_connection(self):
         return not self.listener.has_connection
@@ -216,13 +218,11 @@ class OsuEnvironment(gym.Env):
                 else:
                     self.keyboard.press(key)
                     self.keyboard.release(key)
-                    self.key_pressed = True
             case 2: # hold
                 if self.currently_hold[lane]:
                     return
                 self.keyboard.press(key)
                 self.currently_hold[lane] = True
-                self.key_pressed = True
             case 3: # release
                 if self.currently_hold[lane]:
                     self.keyboard.release(key)
@@ -230,28 +230,29 @@ class OsuEnvironment(gym.Env):
                 else:
                     self.invalid = True
 
-    def _get_reward(self, hit_type):
+    def _get_reward(self, data):
         reward = 0 
         truncate = False
         terminate = False
         # reward based on the action taken
-        match hit_type:
-            case 0: # miss
-                reward = -3
-            case 1: # meh
-                reward = -2
-            case 2: # ok
-                reward = -1
-            case 3: # good
-                reward = 1
-            case 4: # great
-                reward = 4
-            case 5: # perfect
-                reward = 6
-            case 6: # pass
-                terminate = True
-            case 7: # failure
-                truncate = True
+        for hit_type in data:
+            match hit_type:
+                case 0: # miss
+                    reward += -3
+                case 1: # meh
+                    reward += -2
+                case 2: # ok
+                    reward += -1
+                case 3: # good
+                    reward += 1
+                case 4: # great
+                    reward += 4
+                case 5: # perfect
+                    reward += 6
+                case 6: # pass
+                    terminate = True
+                case 7: # failure
+                    truncate = True
                 
         # if there are invalid action
         if self.invalid:
@@ -287,13 +288,14 @@ class OsuEnvironment(gym.Env):
 
         if self.song_begin:
             threads = []
-            self.key_pressed = False
             for lane in range(len(actions)):
                 key_thread = self.executor.submit(self._keyboard_action, lane, self.keys[lane], actions[lane])
                 threads.append(key_thread)
 
             for key in threads:
                 key.result()
+        
+        time.sleep(0.01)
     
     def _key_press(self, key):
         self.keyboard.press(key)

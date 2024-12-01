@@ -93,7 +93,7 @@ class DQN_Agent:
             while not done and self.env.checking_connection():
                 if self.env.song_begin():
                     action = self._action_policy(state)
-                    next_state, reward, terminate, truncate = self.env.step(action)
+                    next_state, reward, terminate, truncate, info = self.env.step(action)
                     
                     # convert to proper tensor shape
                     next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
@@ -104,7 +104,7 @@ class DQN_Agent:
 
                     # push to experience replay where state is not all zeros
                     if not torch.all(state==0):
-                        if reward.item() != 0 or random.random() < 0.1: # avoid memory to overflow with unimportant state
+                        if not info["idle"]  or random.random() < 0.1: # avoid memory to overflow with unimportant state
                             self.experience_replay.push(state, action, reward, next_state, done)
                             update_count += 1
 
@@ -161,7 +161,7 @@ class DQN_Agent:
                             else:
                                 action = self.policy_net(state).argmax(dim=2)
 
-                            next_state, reward, terminate, truncate = self.env.step(action, train=False)
+                            next_state, reward, terminate, truncate, _ = self.env.step(action, train=False)
                             
                             # convert to proper tensor shape
                             next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
@@ -367,8 +367,6 @@ class DQN_Agent:
 
         # Q(s,a) + I(a_expect, a) - Q(s, a_expert)
         margin_loss = torch.max((q_values + margin_values), dim=2)[0] - q_values.gather(2, expert_action.unsqueeze(2)).squeeze(2)
-
-        criterion = torch.nn.CrossEntropyLoss()
 
         # include td loss and margin loss 
         loss = td_loss + margin_loss.mean()
