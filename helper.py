@@ -74,7 +74,6 @@ class SocketListener():
     self.traceback = False
     self.conn = None
     self.sock = None
-    self.latest_data = None
     self.song_end = None
     self.data_handler = None
 
@@ -92,9 +91,6 @@ class SocketListener():
     
     # True if stop() is called    
     self.stop_requested = False       
-
-    # Event flag for new data detection 
-    self.has_new_data = threading.Event()
 
     # truncate when connection didn't close after song duration
     self.song_duration = 1000000
@@ -142,7 +138,7 @@ class SocketListener():
       # reset when new song begin
       time_start = time.time()
       self.song_end = None
-      self.latest_data = None
+      self.data_handler.clear()
       while True:
         # calculate elapsed time
         time_elapsed = time.time() - time_start
@@ -152,15 +148,15 @@ class SocketListener():
         
         try:
           data = self.conn.recv(4)
-          self.latest_data = int.from_bytes(data, byteorder='little')
+          processed_data = int.from_bytes(data, byteorder='little')
+          self.data_handler.add(processed_data)
 
-          self.has_new_data.set() # signal that new data has arrived
-          
-          if self.data_handler:
-            self.data_handler(self.latest_data)
+          if 6 in self.data_handler.get():
+            self.song_end = 6
+            break
 
-          if self.latest_data in {6,7}:
-            self.song_end = self.latest_data
+          if 7 in self.data_handler.get():
+            self.song_end = 7
             break
 
         except socket.timeout:
@@ -203,27 +199,6 @@ class SocketListener():
       print(f'Socket listener stopped.')
     else:
       print('Socket listener is not running.')
-  
-  def fetch_data(self, timeout, action_func=None):
-    """
-      Fetches data specifically after performing an action.
-      action_func: function that triggers the keyboard action
-      timeout: float: Time to wait for data, in seconds
-    """
-    # clear the event flag before performing action
-    self.has_new_data.clear()
-
-    # perform the action function
-    if action_func:
-      action_func()
-
-    # wait for new data within timeout
-    if self.has_new_data.wait(timeout=timeout):
-      return self.latest_data
-    elif self.song_end is not None: # return when there is terminate or truncate signal
-      return self.song_end
-    else:
-      return None # no data received
     
 def preprocess_actions(actions):
     """
@@ -246,18 +221,18 @@ def preprocess_actions(actions):
                 continue
             
             if not key_hold[key]:
-                action[key] = 2
+                action[key] = 2 # press
             else:
-                action[key] = 3
+                action[key] = 3 # hold 
 
             if i + 1 < len(actions):
                 if char not in actions[i+1]:
                     if key_hold[key]:
-                        key_hold[key] = False
-                        action[key] = 1            
+                        action[key] = 1 # release
+                        key_hold[key] = False            
                 else:
                     key_hold[key] = True
-                    action[key] = 3
+                    action[key] = 3 # hold
                 
         clean_actions.append(action)
     
