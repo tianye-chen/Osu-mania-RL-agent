@@ -152,27 +152,14 @@ class SocketListener():
 
           if self.data_handler:
             self.data_handler.add(processed_data)
-
+       
           if 6 in self.data_handler.get():
             self.song_end = 6
-          if self.has_connection:
-            data = self.conn.recv(4)
-            processed_data = int.from_bytes(data, byteorder='little')
-            self.data_handler(processed_data)
-          else:
             break
 
-          if processed_data in [6, 7]:
-            self.song_end = processed_data
+          if 7 in self.data_handler.get():
+            self.song_end = 7
             break
-          
-          # if 6 in self.data_handler.get():
-          #   self.song_end = 6
-          #   break
-
-          # if 7 in self.data_handler.get():
-          #   self.song_end = 7
-          #   break
 
         except socket.timeout:
           continue

@@ -368,8 +368,8 @@ class PPO_Agent:
         avg_loss = 0.0
         criterion = torch.nn.MultiMarginLoss()
         for _ in range(self.n_epoch):
+            # split the song into multiple batches of batch size randomly
             batches, states, actions, old_probs, values, rewards, dones = self.memory.ppo_sample(self.batch_size)
-            _, expert_states, expert_actions, _, _, _, _ = self.expert_replay.ppo_sample(self.batch_size)
 
             states = torch.concat(states)
             actions = torch.concat(actions)
@@ -378,22 +378,23 @@ class PPO_Agent:
             rewards = torch.concat(rewards)
             dones = torch.tensor([done for done in dones], dtype=torch.long, device=device)
 
-            expert_states = torch.concat(expert_states)
-            expert_actions = torch.concat(expert_actions)
-
             advantages = self._compute_gae(rewards, values, dones)
 
             for batch in batches:
+                # randomly sample a batch from expert replay
+                transitions = self.expert_replay.sample(len(batch))
+                expert_state_batch, expert_action_batch, _, _, _, _ = zip(*transitions)
+
+                expert_state_batch = torch.concat(expert_state_batch)
+                expert_action_batch = torch.concat(expert_action_batch)
+
                 state_batch = torch.tensor(states[batch], device=device)
                 old_prob_batch = torch.tensor(old_probs[batch], device=device)
                 action_batch = torch.tensor(actions[batch], device=device)
 
-                expert_state_batch = torch.tensor(expert_states[batch], device=device)
-                expert_action_batch = torch.tensor(expert_actions[batch], device=device)
-
                 logit, _ = self.actor(state_batch)
-                dist = Categorical(logits=logit)
                 value, _ = self.critic(state_batch)
+                dist = Categorical(logits=logit)
                 new_prob = dist.log_prob(action_batch)
                 entroy = dist.entropy().mean()
                 
@@ -404,6 +405,7 @@ class PPO_Agent:
                 actor_loss = -torch.min(sur1, sur2).mean()
                 critic_loss = torch.nn.MSELoss()(value, return_batch)
 
+                # compute expert loss
                 expert_loss = 0
                 expert_logit, _ = self.actor(expert_state_batch)
                 for i in range(logit.shape[1]):
