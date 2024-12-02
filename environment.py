@@ -12,9 +12,6 @@ import time
 
 class OsuEnvironment(gym.Env):
     def __init__(self, num_frame = 4, max_notes = 8, monitor_id = 1):
-        # set frame per second
-        self.frame_interval = 1 / 15
-
         # setup the neccessary resources for vision task
         self.monitor_id = monitor_id
         self._vision_setup()
@@ -114,6 +111,7 @@ class OsuEnvironment(gym.Env):
         self.currently_hold = [False] * len(self.keys)
         self.invalid = False
         self.observation.clear()
+        self.hit_data.clear()
         note_vectors = [[0,0,0]] * self.max_notes
         for _ in range(self.num_frame):
             self.observation.append(note_vectors)
@@ -130,7 +128,6 @@ class OsuEnvironment(gym.Env):
         return f"{self.song}, mode: {self.mode}"
     
     def step(self, actions, train=True):
-        time_start = time.time()
         reward = 0
         truncate = False
         terminate = False
@@ -147,12 +144,6 @@ class OsuEnvironment(gym.Env):
         if len(data) != 0:
             reward, truncate, terminate = self._get_reward(data)
             info["idle"] = False
-            
-        # ensure that each step represents proper FS frame
-        time_end = time.time() - time_start
-
-        if time_end < self.frame_interval and train:
-            time.sleep(self.frame_interval-time_end)
 
         return self.observation, reward, truncate, terminate, info
 

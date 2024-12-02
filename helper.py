@@ -138,7 +138,6 @@ class SocketListener():
       # reset when new song begin
       time_start = time.time()
       self.song_end = None
-      self.data_handler.clear()
       while True:
         # calculate elapsed time
         time_elapsed = time.time() - time_start
@@ -149,7 +148,9 @@ class SocketListener():
         try:
           data = self.conn.recv(4)
           processed_data = int.from_bytes(data, byteorder='little')
-          self.data_handler.add(processed_data)
+
+          if self.data_handler:
+            self.data_handler.add(processed_data)
 
           if 6 in self.data_handler.get():
             self.song_end = 6

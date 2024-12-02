@@ -525,11 +525,6 @@ class PPO_Agent:
         for i in range(len(frames)):
             note_vector = frames[i] 
             note_vector = note_vector[:self.max_notes]
-            if note_vector != []:
-                note_vector = np.array(note_vector, dtype=np.float32)
-                note_vector[:, :2] += 1
-                note_vector = note_vector.tolist()
-                
             note_vector += [[0,0,0]] * (self.max_notes - len(note_vector))
             note_vector = np.array(note_vector, dtype=np.float32)
             note_vector[:, 2] /= 100.0
