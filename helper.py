@@ -138,6 +138,7 @@ class SocketListener():
       # reset when new song begin
       time_start = time.time()
       self.song_end = None
+
       while True:
         # calculate elapsed time
         time_elapsed = time.time() - time_start
@@ -154,11 +155,24 @@ class SocketListener():
 
           if 6 in self.data_handler.get():
             self.song_end = 6
+          if self.has_connection:
+            data = self.conn.recv(4)
+            processed_data = int.from_bytes(data, byteorder='little')
+            self.data_handler(processed_data)
+          else:
             break
 
-          if 7 in self.data_handler.get():
-            self.song_end = 7
+          if processed_data in [6, 7]:
+            self.song_end = processed_data
             break
+          
+          # if 6 in self.data_handler.get():
+          #   self.song_end = 6
+          #   break
+
+          # if 7 in self.data_handler.get():
+          #   self.song_end = 7
+          #   break
 
         except socket.timeout:
           continue
@@ -166,8 +180,7 @@ class SocketListener():
         if not data:
           self.song_end = 7
           break
-    
-    # disable print during tranining
+        
     except ConnectionResetError:
       print(f'Connection reset by {addr}')
     except Exception as e:
@@ -175,9 +188,9 @@ class SocketListener():
         print(e)
         traceback.print_exc()
     finally:
-      self.conn.close()
       self.has_connection = False
       self.is_first_connection = False
+      self.conn.close()
       print(f'Connection closed.')
       
   def stop(self):
