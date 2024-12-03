@@ -30,7 +30,7 @@ class A2C_Agent():
                 behavior_cloning = True,
                 batch_size=64,
                 gamma=0.99,
-                beta=0.5,
+                beta=0.1,
                 grad_clip = 1.0,
                 device='cpu'
               ):
@@ -149,8 +149,8 @@ class A2C_Agent():
           categorical_dist = torch.distributions.Categorical(softmax_probs)
           entropy = categorical_dist.entropy().mean() * max(0.001, self.beta - episode / max_episode)
 
-          log_probs = -torch.log(softmax_probs)
-          policy_loss.append(log_probs[actions[i_a]] * advantage + entropy)
+          log_probs = torch.log(softmax_probs)
+          policy_loss.append(-log_probs[actions[i_a]] * advantage + entropy)
 
       value_loss = F.mse_loss(value, R)
 
