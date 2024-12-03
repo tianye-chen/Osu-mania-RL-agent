@@ -11,7 +11,7 @@ from collections import deque
 import time
 
 class OsuEnvironment(gym.Env):
-    def __init__(self, num_frame = 4, max_notes = 8, monitor_id = 1):
+    def __init__(self, num_frame = 4, max_notes = 8, monitor_id = 1, conn_print=False):
         # setup the neccessary resources for vision task
         self.monitor_id = monitor_id
         self._vision_setup()
@@ -44,7 +44,7 @@ class OsuEnvironment(gym.Env):
         # socket setup
         self.listener = SocketListener()
         self.hit_data = DataQueue()
-        self.listener.start(data_handler=self.hit_data)
+        self.listener.start(data_handler=self.hit_data.add, show_print=conn_print)
 
         # remeber the song and mode it select
         self.song = ""
@@ -122,7 +122,7 @@ class OsuEnvironment(gym.Env):
         return self.listener.is_listening or self.listener.is_first_connection
     
     def song_begin(self):
-        return self.listener.has_connection
+        return self.listener.has_connection 
     
     def getSong(self):
         return f"{self.song}, mode: {self.mode}"
@@ -145,6 +145,13 @@ class OsuEnvironment(gym.Env):
             reward, truncate, terminate = self._get_reward(data)
             info["idle"] = False
 
+        # check in case it isn't in the data queue
+        if self.listener.song_end == 6:
+            terminate = True
+
+        if self.listener.song_end == 7:
+            truncate = True
+            
         return self.observation, reward, truncate, terminate, info
 
     def lost_connection(self):

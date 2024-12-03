@@ -9,6 +9,7 @@ import os
 from collections import deque
 from torch.distributions.categorical import Categorical
 from typing import Tuple
+import math
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -105,7 +106,7 @@ class PPO_Agent:
             if episode%10 == 0:
                 print(f"Episod {episode}, pre-training loss: {avg_loss}")
 
-    def train(self, total_episode=500, c=0.02):
+    def train(self, total_episode=500, c=0.02, expert_weight=0.2, margin=0.8):
         """
         train the agent for x number of episode
         Open the ous game and go to the song selection scene
@@ -115,6 +116,8 @@ class PPO_Agent:
         args:
             total_episode: how many time the agent will train
             c: entropy coefficient which controls the weight of entropy
+            expert_weight: weights for the expert loss
+            margin: determines how much the predicted action must differ to the expert action
         """
         self.actor.train()
         self.critic.train()
@@ -134,7 +137,9 @@ class PPO_Agent:
 
                     next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
                     reward = torch.tensor([reward], device=device)
-                    self.memory.ppo_push(state, action, prob, value, reward, done)
+
+                    if not torch.all(state==0):
+                        self.memory.ppo_push(state, action, prob, value, reward, done)
 
                     state = next_state
                     done = truncate or terminate
@@ -143,8 +148,10 @@ class PPO_Agent:
 
                 if self.env.lost_connection():
                     break
-            
-            avg_loss = self._ppo_update(c)
+
+            self.env.return_to_song_selection_after_song()
+
+            avg_loss = self._ppo_update(c=c, expert_weight=expert_weight, margin=margin)
             self.episode += 1
 
             if self.episode % 10 ==0:
@@ -153,8 +160,6 @@ class PPO_Agent:
             self.loss.append(avg_loss)
             self.rewards.append(total_reward)
             self.steps.append(total_step)
-
-            self.env.return_to_song_selection_after_song()
 
             if episode == total_episode:
                 self.keyboard.type("Finish training")
@@ -353,7 +358,7 @@ class PPO_Agent:
 
         print("Model Loaded")
 
-    def _ppo_update(self, c=0.2, expert_weight=0.2) -> float:
+    def _ppo_update(self, c=0.2, expert_weight=0.2, margin=0.8) -> float:
         """
         Update the gradient by n number of epoch from mini batches 
         combine the loss with ppo loss and expert loss
@@ -361,12 +366,13 @@ class PPO_Agent:
         args:
             c: entropy coefficient which control exploration rate
             expert_weight: weights for the expert loss
+            margin: determines how much the predicted action must differ to the expert action
         
         returns:
             avg_loss: average loss 
         """
         avg_loss = 0.0
-        criterion = torch.nn.MultiMarginLoss()
+        criterion = torch.nn.MultiMarginLoss(margin=margin)
         for _ in range(self.n_epoch):
             # split the song into multiple batches of batch size randomly
             batches, states, actions, old_probs, values, rewards, dones = self.memory.ppo_sample(self.batch_size)
@@ -382,7 +388,7 @@ class PPO_Agent:
 
             for batch in batches:
                 # randomly sample a batch from expert replay
-                transitions = self.expert_replay.sample(len(batch))
+                transitions = self.expert_replay.sample(math.ceil(len(batch)/2))
                 expert_state_batch, expert_action_batch, _, _, _, _ = zip(*transitions)
 
                 expert_state_batch = torch.concat(expert_state_batch)
