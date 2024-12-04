@@ -139,7 +139,8 @@ class PPO_Agent:
                     reward = torch.tensor([reward], device=device)
 
                     if not torch.all(state==0):
-                        self.memory.ppo_push(state, action, prob, value, reward, done)
+                        if not info["idle"] or random.random() < 0.05:
+                            self.memory.ppo_push(state, action, prob, value, reward, done)
 
                     state = next_state
                     done = truncate or terminate
@@ -388,7 +389,7 @@ class PPO_Agent:
 
             for batch in batches:
                 # randomly sample a batch from expert replay
-                transitions = self.expert_replay.sample(math.ceil(len(batch)/2))
+                transitions = self.expert_replay.sample(len(batch))
                 expert_state_batch, expert_action_batch, _, _, _, _ = zip(*transitions)
 
                 expert_state_batch = torch.concat(expert_state_batch)
