@@ -29,7 +29,7 @@ class A2C_Agent():
                 optimizer,
                 batch_size=64,
                 gamma=0.9,
-                beta=0.5,
+                beta=0.1,
                 grad_clip = 1.0,
                 device='cpu'
               ):
@@ -41,21 +41,31 @@ class A2C_Agent():
     self.device = device
     self.grad_clip = grad_clip
     self.batch_size = batch_size
-    self.pretrain_accuracies = []
-    self.pretrain_losses = []
     
     self.memory = ReplayMemory(10000)
     self.expert_memory = ReplayMemory()
+    self.action_weights = torch.tensor([1, 1, 1, 1], dtype=torch.float, device=self.device)
     
     # Debug
     self.action_totals = [0] * 4
     self.hit_type_totals = [0] * 8
+    
+    self.pretrain_accuracies = []
+    self.pretrain_losses = []
+    
+    self.train_losses = []
+    self.train_rewards = []
+    
+    self.test_rewards = []
 
     self._get_expert_replay()
       
   def pretrain(self, max_episode):
     self.ac_net.train()
-    criterion = nn.CrossEntropyLoss()
+    total_samples = sum(self.action_totals)
+    self.action_weights = torch.tensor([total_samples / a for a in self.action_totals], dtype=torch.float, device=self.device)
+    criterion = [nn.CrossEntropyLoss(weight=self.action_weights) for _ in range(4)]
+    print(f'Using weights for CEL: {self.action_weights}')
     
     for episode in range(max_episode):
       correct = 0
@@ -75,10 +85,9 @@ class A2C_Agent():
         for i in range(probs.shape[1]):
           lane_action = action_batch[:, i]
           lane_probs = probs[:, i, :]
-          loss += criterion(lane_probs, lane_action)
+          loss += criterion[i](lane_probs, lane_action)
           
         loss /= 4
-        self.pretrain_losses.append(loss.item())
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
@@ -94,6 +103,7 @@ class A2C_Agent():
             correct += 1
             
       self.pretrain_accuracies.append(correct / total)
+      self.pretrain_losses.append(total_loss / len(batches))
       
       if np.mean(self.pretrain_accuracies[-3:]) > 0.98:
         break
@@ -101,9 +111,8 @@ class A2C_Agent():
       print(f'Episode {episode:<5} Loss: {total_loss/len(batches):>10.4f}, Accuracy: {np.mean(self.pretrain_accuracies[-5:]):>10.4f}')
   
   def train(self, max_episode):
-    total_rewards = []
     self.ac_net.train()
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(weight=self.action_weights)
     
     for episode in range(max_episode):
       terminated = False
@@ -169,25 +178,26 @@ class A2C_Agent():
       
       expert_loss /= 4
 
-      loss = torch.sum(torch.stack(policy_loss)) + value_loss * 0.5 + expert_loss * 0.2
+      loss = torch.sum(torch.stack(policy_loss)) + value_loss + expert_loss
       self.optimizer.zero_grad()
       loss.backward()
       nn.utils.clip_grad_norm_(self.ac_net.parameters(), self.grad_clip)
       self.optimizer.step()
 
-      total_rewards.append(sum(rewards))
+      self.train_rewards.append(sum(rewards))
+      self.train_losses.append(loss.item())
+      
       meta_data = self.env.get_meta_data()
-      print(f'Actor loss: {torch.sum(torch.stack(policy_loss))}, Value loss: {value_loss * 0.5}, Expert loss: {expert_loss * 0.2}')
+      print(f'Actor loss: {torch.sum(torch.stack(policy_loss))}, Value loss: {value_loss}, Expert loss: {expert_loss}')
       print(f'Episode {episode:<5} {"[" + meta_data["song_name"] + "] " + str(meta_data["difficulty"]):<50} Reward: {sum(rewards):>10.4f}, loss: {loss.item():>10.4f}')
       print(self.env.reward_func.get_debug(self.env.render_mode))
       print(self.env.total_invalid_actions)
       print(self.env.actions_taken)
       
-    return total_rewards
+    return self.train_rewards
   
   def test(self, max_episode):
     self.ac_net.eval()
-    total_rewards = []
     hx = None
     
     for episode in range(max_episode):
@@ -212,7 +222,7 @@ class A2C_Agent():
 
         state = torch.tensor(next_state, dtype=torch.float32, device=self.device).unsqueeze(0)
         
-      total_rewards.append(sum(rewards))
+      self.test_rewards.append(sum(rewards))
       meta_data = self.env.get_meta_data()
       
       print(f'Episode {episode:<5} {"[" + meta_data["song_name"] + "] " + str(meta_data["difficulty"]):<50} Reward: {sum(rewards):>10.4f}')
@@ -220,7 +230,7 @@ class A2C_Agent():
       print(self.env.total_invalid_actions)
       print(self.env.actions_taken)
       
-    return total_rewards
+    return self.test_rewards
   
   def _get_expert_replay(self):
     '''
