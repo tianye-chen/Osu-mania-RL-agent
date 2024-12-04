@@ -236,11 +236,11 @@ class Reward:
       elif i == 3:
         reward += 1
       elif i == 5:
-        reward += 2
+        reward += 1.5
       elif i == 6:
         reward -= 10
       elif i == 7:
-        reward += 15
+        reward += 0
           
     return reward
         

@@ -27,10 +27,9 @@ class A2C_Agent():
                 ac_net,
                 env,
                 optimizer,
-                behavior_cloning = True,
                 batch_size=64,
-                gamma=0.99,
-                beta=0.1,
+                gamma=0.9,
+                beta=0.5,
                 grad_clip = 1.0,
                 device='cpu'
               ):
@@ -52,8 +51,7 @@ class A2C_Agent():
     self.action_totals = [0] * 4
     self.hit_type_totals = [0] * 8
 
-    if behavior_cloning:
-      self._get_expert_replay()
+    self._get_expert_replay()
       
   def pretrain(self, max_episode):
     self.ac_net.train()
@@ -105,6 +103,7 @@ class A2C_Agent():
   def train(self, max_episode):
     total_rewards = []
     self.ac_net.train()
+    criterion = nn.CrossEntropyLoss()
     
     for episode in range(max_episode):
       terminated = False
@@ -149,12 +148,28 @@ class A2C_Agent():
           categorical_dist = torch.distributions.Categorical(softmax_probs)
           entropy = categorical_dist.entropy().mean() * max(0.001, self.beta - episode / max_episode)
 
-          log_probs = torch.log(softmax_probs)
-          policy_loss.append(-log_probs[actions[i_a]] * advantage + entropy)
-
+          log_probs = -torch.log(softmax_probs)
+          policy_loss.append(log_probs[actions[i_a]] * advantage - entropy)
+          
       value_loss = F.mse_loss(value, R)
+      
+      # Calculate expert loss based on policy network actions compared to expert actions
+      expert_experiences = self.expert_memory.sample(len(rewards))
+      expert_states, expert_actions, *_ = zip(*expert_experiences)
+      expert_states = torch.stack(expert_states)
+      expert_actions = torch.stack(expert_actions).long()
+      
+      expert_probs, _, _ = self.ac_net(expert_states)
+      expert_loss = 0
+      
+      for i in range(expert_probs.shape[1]):
+        lane_action = expert_actions[:, i]
+        lane_probs = expert_probs[:, i, :]
+        expert_loss += criterion(lane_probs, lane_action)
+      
+      expert_loss /= 4
 
-      loss = torch.sum(torch.stack(policy_loss)) + value_loss * 0.5
+      loss = torch.sum(torch.stack(policy_loss)) + value_loss * 0.5 + expert_loss * 0.2
       self.optimizer.zero_grad()
       loss.backward()
       nn.utils.clip_grad_norm_(self.ac_net.parameters(), self.grad_clip)
@@ -162,6 +177,7 @@ class A2C_Agent():
 
       total_rewards.append(sum(rewards))
       meta_data = self.env.get_meta_data()
+      print(f'Actor loss: {torch.sum(torch.stack(policy_loss))}, Value loss: {value_loss * 0.5}, Expert loss: {expert_loss * 0.2}')
       print(f'Episode {episode:<5} {"[" + meta_data["song_name"] + "] " + str(meta_data["difficulty"]):<50} Reward: {sum(rewards):>10.4f}, loss: {loss.item():>10.4f}')
       print(self.env.reward_func.get_debug(self.env.render_mode))
       print(self.env.total_invalid_actions)

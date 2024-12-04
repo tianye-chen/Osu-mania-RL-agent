@@ -1,0 +1,37 @@
+[
+  {
+    "song_name": "Six Trillion Years and Overnight Story",
+    "song_duration": 84,
+    "note_count": 792,
+    "hold_note_count": 23,
+    "difficulty": 2.93
+  },
+  {
+    "song_name": "Venom (Cut Ver.)",
+    "song_duration": 142,
+    "note_count": 684,
+    "hold_note_count": 649,
+    "difficulty": 3.19
+  },
+  {
+    "song_name": "Sway to My Beat in Cosmos",
+    "song_duration": 149,
+    "note_count": 797,
+    "hold_note_count": 211,
+    "difficulty": 2.42
+  },
+  {
+    "song_name": "enchanted love",
+    "song_duration": 148,
+    "note_count": 440,
+    "hold_note_count": 535,
+    "difficulty": 2.62
+  },
+  {
+    "song_name": "Ahoy!! Warera Houshou Kaizokudan",
+    "song_duration": 104,
+    "note_count": 697,
+    "hold_note_count": 176,
+    "difficulty": 2.93
+  }
+]
