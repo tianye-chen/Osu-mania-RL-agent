@@ -193,10 +193,10 @@ class PPO_Agent:
                 self.actor_hidden = None
                 state = self.env.reset()
                 state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0).view(1, self.num_frame, -1)
-                self.env.pick_random_song()
+                self.env.pick_random_song(training=False, index=episode)
                 while not done and self.env.checking_connection():
                     with torch.no_grad():
-                        if self.env.song_begin(training=False, index=episode):
+                        if self.env.song_begin():
                                 logit, self.actor_hidden = self.actor(state, self.actor_hidden)
                                 dist = Categorical(logits=logit)
                                 action = dist.probs.argmax(dim=-1)
