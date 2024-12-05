@@ -111,6 +111,7 @@ class SocketListener():
   def _listen(self):
     try:
       self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      
       self.sock.bind((self.server, self.port))
       self.sock.listen(1)
       self.is_listening = True
@@ -151,10 +152,14 @@ class SocketListener():
           break
         
         try:
-          data = self.conn.recv(4)
-          processed_data = int.from_bytes(data, byteorder='little')
+          if self.has_connection:
+            data = self.conn.recv(4)
+            processed_data = int.from_bytes(data, byteorder='little')
+            self.data_handler(processed_data)
+          else:
+            break
 
-          if not data:
+          if processed_data in [6, 7]:
             self.song_end = 7
             break
 
@@ -294,10 +299,7 @@ def pad_inner_array(arr, pad_value, pad_len):
   
   for inner in arr:
     inner = inner + [pad_value] * (pad_len - len(inner))
-    
-    if len(inner) > pad_len:
-      inner = inner[:pad_len]
-      
+    inner = inner[:pad_len]
     padded.append(inner)
     
   return padded

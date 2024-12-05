@@ -219,30 +219,26 @@ class Reward:
       return good_actions, bad_actions
   
   
-  def get_in_game_reward(self, hit_actions, notes):
+  def get_in_game_reward(self, hit_actions):
     '''
     Returns rewards for hit action results provided by the game
     '''
     reward = 0
-    notes = [x for x in notes if x[2] > self.begin_check][:4]
 
     for i in hit_actions:
       self.debug_in_game_actions[i] += 1
-      match i:
-        case 0:
-          reward += -1
-        case 1:
-          reward += 1
-        case 2:
-          reward += 2
-        case 3:
-          reward += 4
-        case 5:
-          reward += 8
-        case 6:
-          reward += 0
-        case 7:
-          reward += 0
+      if i == 0:
+        reward += -3
+      elif i == 1:
+        reward += -2
+      elif i == 2:
+        reward += -1
+      elif i == 4:
+        reward += 1
+      elif i == 3:
+        reward += 4
+      elif i == 5:
+        reward += 6
           
     return reward
         
