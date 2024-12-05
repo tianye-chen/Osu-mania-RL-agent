@@ -165,7 +165,7 @@ class PPO_Agent:
             if episode == total_episode:
                 self.keyboard.type("Finish training")
                 
-    def eval(self, total_episode=10, pretrain=False):
+    def eval(self, pretrain=False):
         """
         if evaluate for training:
             evaluate the agent for x number of episode
@@ -177,7 +177,6 @@ class PPO_Agent:
             print out the accuarcy by comparing predicted with truth action based on the state
 
         args:
-            total_episode: how many time the agent will evaluate
             pretrain: evaluate flag for pretrain or train
         """
         self.actor.eval()
@@ -187,7 +186,7 @@ class PPO_Agent:
             total_rewards = []
             songs = []
             total_steps = []
-            for episode in range(1, total_episode+1):
+            for episode in range(1, 10+1):
                 done = False
                 episode_reward = 0
                 episode_steps = 0

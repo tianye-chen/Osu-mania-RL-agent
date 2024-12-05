@@ -188,7 +188,7 @@ class OsuEnvironment(gym.Env):
 
         time.sleep(1) # time for the search to showup
 
-        self.mode, self.duration = self.song_dict.get(self.song)
+        self.mode, self.duration = self.song_dict.get(self.song) if training else self.test_song_dict.get(self.song)
 
         if self.mode != 1:
             self.mode = np.random.randint(1, self.mode+1) if training else self.mode
