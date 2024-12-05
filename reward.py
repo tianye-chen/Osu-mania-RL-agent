@@ -228,19 +228,17 @@ class Reward:
     for i in hit_actions:
       self.debug_in_game_actions[i] += 1
       if i == 0:
-        reward += -1
+        reward += -3
       elif i == 1:
-        reward += -0.2
+        reward += -2
       elif i == 2:
-        reward += 0.5
-      elif i == 3:
+        reward += -1
+      elif i == 4:
         reward += 1
+      elif i == 3:
+        reward += 4
       elif i == 5:
-        reward += 1.5
-      elif i == 6:
-        reward -= 10
-      elif i == 7:
-        reward += 0
+        reward += 6
           
     return reward
         

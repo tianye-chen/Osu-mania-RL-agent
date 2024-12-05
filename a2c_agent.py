@@ -30,7 +30,7 @@ class A2C_Agent():
                 batch_size=64,
                 gamma=0.9,
                 beta=0.1,
-                grad_clip = 1.0,
+                grad_clip = 10.0,
                 device='cpu'
               ):
     self.ac_net = ac_net
@@ -60,7 +60,7 @@ class A2C_Agent():
 
     self._get_expert_replay()
       
-  def pretrain(self, max_episode):
+  def bc_train(self, max_episode):
     self.ac_net.train()
     total_samples = sum(self.action_totals)
     self.action_weights = torch.tensor([total_samples / a for a in self.action_totals], dtype=torch.float, device=self.device)
@@ -75,6 +75,7 @@ class A2C_Agent():
       states = torch.stack(states)
       actions = torch.stack(actions)
 
+      # Gather batches from returned batch indices
       for batch in batches:
         state_batch = torch.tensor(states[batch], device=self.device)
         action_batch = torch.tensor(actions[batch], dtype=torch.long, device=self.device)
@@ -82,6 +83,8 @@ class A2C_Agent():
         probs, _, _ = self.ac_net(state_batch)                
         
         loss = 0
+        
+        # Evaluate loss for each lane
         for i in range(probs.shape[1]):
           lane_action = action_batch[:, i]
           lane_probs = probs[:, i, :]
@@ -112,7 +115,7 @@ class A2C_Agent():
   
   def train(self, max_episode):
     self.ac_net.train()
-    criterion = nn.CrossEntropyLoss(weight=self.action_weights)
+    criterion = nn.CrossEntropyLoss()
     
     for episode in range(max_episode):
       terminated = False
@@ -139,6 +142,7 @@ class A2C_Agent():
         
       R = 0 if terminated else value
 
+      policy_loss = []
       # Calculate policy loss
       for i in reversed(range(len(rewards))):
         R = torch.tensor(rewards[i], dtype=torch.float32, device=self.device) + self.gamma * R
@@ -147,7 +151,7 @@ class A2C_Agent():
         probs, value, hx = self.ac_net(states[i], hx)
         
         advantage = R - value
-        policy_loss = []
+        multi_policy_loss = 0
         
         for i_a, prob in enumerate(probs):
           actions = multi_actions[i]
@@ -155,10 +159,13 @@ class A2C_Agent():
 
           # Entropy value controlled by a decaying beta for exploration
           categorical_dist = torch.distributions.Categorical(softmax_probs)
-          entropy = categorical_dist.entropy().mean() * max(0.001, self.beta - episode / max_episode)
+          entropy = categorical_dist.entropy().sum() * max(0.001, self.beta - episode / max_episode)
 
-          log_probs = -torch.log(softmax_probs)
-          policy_loss.append(log_probs[actions[i_a]] * advantage - entropy)
+          log_probs = torch.log(softmax_probs)
+          multi_policy_loss += -log_probs[actions[i_a]] * advantage + entropy
+          multi_policy_loss = torch.clamp(multi_policy_loss, -1.0, 1.0)
+          
+        policy_loss.append(multi_policy_loss / 4)
           
       value_loss = F.mse_loss(value, R)
       
@@ -178,7 +185,7 @@ class A2C_Agent():
       
       expert_loss /= 4
 
-      loss = torch.sum(torch.stack(policy_loss)) + value_loss + expert_loss
+      loss = torch.mean(torch.stack(policy_loss)) + value_loss * 0.5 + expert_loss * 0.5
       self.optimizer.zero_grad()
       loss.backward()
       nn.utils.clip_grad_norm_(self.ac_net.parameters(), self.grad_clip)
@@ -280,9 +287,9 @@ class A2C_Agent():
         self.hit_type_totals[h] += 1
 
       # Experiences with more than two 0s in the action set are pushed to memory with a 50% chance
-      #if not sum(_action == 0) > 2 or random.random() < 0.5:
-      for a in _action:
-        self.action_totals[int(a)] += 1
-        
-      self.expert_memory.ppo_push(_state, _action, 0, 0, _reward, terminated)
+      if not sum(_action == 0) > 3 or random.random() < 0.1:
+        for a in _action:
+          self.action_totals[int(a)] += 1
+          
+        self.expert_memory.ppo_push(_state, _action, 0, 0, _reward, terminated)
       

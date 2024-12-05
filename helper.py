@@ -109,6 +109,7 @@ class SocketListener():
   def _listen(self):
     try:
       self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      
       self.sock.bind((self.server, self.port))
       self.sock.listen(1)
       self.is_listening = True
