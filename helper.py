@@ -95,15 +95,17 @@ class SocketListener():
     # truncate when connection didn't close after song duration
     self.song_duration = 1000000
 
-  def start(self, data_handler=None, traceback=True):
+  def start(self, data_handler=None, traceback=True, show_print=True):
     '''
     Starts the socket listener
     
     data_handler: a callback function that receives hit type data
+    show_print: flag for print statement for the socket to avoid having excessive printing statement for training
     '''
     self.traceback = traceback
     self.stop_requested = False
     self.data_handler = data_handler
+    self.show_print = show_print
     threading.Thread(target=self._listen, daemon=True).start()
     
   def _listen(self):
@@ -124,7 +126,8 @@ class SocketListener():
         if self.sock is not None:
           self.conn, addr = self.sock.accept()
           self.conn.settimeout(5)  # Timeout in seconds to avoid waiting forever
-          #print(f'Connection from {addr}') disable print during tranining
+          if self.show_print:
+            print(f'Connection from {addr}') 
           self.has_connection = True
           self._handle_connection(addr)
     except Exception as e:
@@ -139,11 +142,12 @@ class SocketListener():
       # reset when new song begin
       time_start = time.time()
       self.song_end = None
-
+      processed_data = None
       while True:
         # calculate elapsed time
         time_elapsed = time.time() - time_start
         if time_elapsed > self.song_duration: # disconnect when over song duration
+          print("Timeout")
           self.song_end = 7
           break
         
@@ -156,15 +160,18 @@ class SocketListener():
             break
 
           if processed_data in [6, 7]:
-            self.song_end = processed_data
+            self.song_end = 7
             break
 
+          if self.data_handler:
+              self.data_handler(processed_data)
+       
+          if processed_data in {6,7}:
+            self.song_end = processed_data
+            break
+            
         except socket.timeout:
           continue
-
-        if not data:
-          self.song_end = 7
-          break
         
     except ConnectionResetError:
       print(f'Connection reset by {addr}')
@@ -176,7 +183,8 @@ class SocketListener():
       self.has_connection = False
       self.is_first_connection = False
       self.conn.close()
-      print(f'Connection closed.')
+      if self.show_print:
+        print(f'Connection closed.')
       
   def stop(self):
     self.stop_requested = True
