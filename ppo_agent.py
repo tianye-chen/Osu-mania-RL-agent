@@ -186,7 +186,7 @@ class PPO_Agent:
             total_rewards = []
             songs = []
             total_steps = []
-            for episode in range(1, 10+1):
+            for episode in range(10):
                 done = False
                 episode_reward = 0
                 episode_steps = 0
@@ -196,7 +196,7 @@ class PPO_Agent:
                 self.env.pick_random_song()
                 while not done and self.env.checking_connection():
                     with torch.no_grad():
-                        if self.env.song_begin():
+                        if self.env.song_begin(training=False, index=episode):
                                 logit, self.actor_hidden = self.actor(state, self.actor_hidden)
                                 dist = Categorical(logits=logit)
                                 action = dist.probs.argmax(dim=-1)
@@ -219,7 +219,7 @@ class PPO_Agent:
 
                 self.env.return_to_song_selection_after_song()
 
-                if episode == total_episode:
+                if episode == 9:
                     self.keyboard.type("Finish evaluating")
 
             plt.plot(songs, total_rewards)

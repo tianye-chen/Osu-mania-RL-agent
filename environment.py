@@ -118,7 +118,6 @@ class OsuEnvironment(gym.Env):
             "teo": [4, 3*60+22],
             "ghoul": [2, 4*60+4]
         }
-        self.test_song_index=0
 
     def reset(self):
         # time for switching to the game and connection to reset
@@ -172,15 +171,14 @@ class OsuEnvironment(gym.Env):
     def lost_connection(self):
         return not self.listener.has_connection
         
-    def pick_random_song(self, training=True):
+    def pick_random_song(self, training=True, index=0):
         # empty search bar
         self.executor.submit(self._key_press, 'a').result()
         self.executor.submit(self._key_press, Key.esc).result()
 
         # get random song
         song_index = np.random.randint(0, len(self.song_dict))
-        self.song = list(self.song_dict.keys())[song_index] if training else list(self.test_song_dict.keys())[self.test_song_index]
-        self.test_song_index += 1
+        self.song = list(self.song_dict.keys())[song_index] if training else list(self.test_song_dict.keys())[index]
 
         # enter the song name in the search bar
         for char in self.song:
