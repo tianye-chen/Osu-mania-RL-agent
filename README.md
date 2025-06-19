@@ -1,5 +1,3 @@
-For CSE573 final project at UB Fall 2024
-
 ## YOLOv5n (Object Identification) training setup
 
 - Download osu!lazer from the official site
